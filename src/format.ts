@@ -1,0 +1,85 @@
+export type MetricTone = 'normal' | 'warning';
+
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const;
+const MIB = 1024 ** 2;
+
+function finiteNonNegative(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function formatScaled(value: number | null | undefined, suffix: string): string {
+  const safeValue = finiteNonNegative(value);
+  if (safeValue === null) {
+    return '--';
+  }
+
+  let scaled = safeValue;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+
+  const unit = BYTE_UNITS[unitIndex] ?? 'B';
+  if (unitIndex === 0) {
+    return `${Math.round(scaled)} ${unit}${suffix}`;
+  }
+  return `${scaled.toFixed(1)} ${unit}${suffix}`;
+}
+
+export function formatBytes(value: number | null | undefined): string {
+  return formatScaled(value, '');
+}
+
+export function formatSpeed(value: number | null | undefined): string {
+  return formatScaled(value, '/s');
+}
+
+export function formatPercent(value: number | null | undefined): string {
+  const safeValue = finiteNonNegative(value);
+  if (safeValue === null) {
+    return '--';
+  }
+  return `${Math.round(Math.min(100, safeValue))}%`;
+}
+
+export function progressBar(valueOrRatio: number, totalOrWidth: number, width?: number): string {
+  const resolvedWidth = width ?? totalOrWidth;
+  if (!Number.isInteger(resolvedWidth) || resolvedWidth <= 0) {
+    return '';
+  }
+
+  const ratio = width === undefined
+    ? resolvedWidth > 0 ? valueOrRatio / resolvedWidth : 0
+    : totalOrWidth > 0
+      ? valueOrRatio / totalOrWidth
+      : 0;
+  const safeRatio = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
+  const filled = Math.round(safeRatio * resolvedWidth);
+  return '█'.repeat(filled) + '░'.repeat(resolvedWidth - filled);
+}
+
+export function metricTone(value: number | null | undefined): MetricTone {
+  return typeof value === 'number' && Number.isFinite(value) && value > 70 ? 'warning' : 'normal';
+}
+
+export function networkTone(bytesPerSecond: number | null | undefined): MetricTone {
+  return typeof bytesPerSecond === 'number'
+    && Number.isFinite(bytesPerSecond)
+    && bytesPerSecond > MIB
+    ? 'warning'
+    : 'normal';
+}
+
+export function formatTimestamp(timestamp: number | null | undefined): string {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
+    return '--:--:--';
+  }
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
