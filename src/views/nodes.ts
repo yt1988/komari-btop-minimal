@@ -1,5 +1,5 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
-import { normalizeRegionCode, regionFlagDataUrl } from '../region';
+import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { getTrafficPresentation } from '../traffic';
 import type { NodeState } from '../domain';
 
@@ -20,20 +20,28 @@ function addTone(node: HTMLElement, tone: 'normal' | 'warning', online: boolean)
   node.classList.add(!online ? 'danger' : tone === 'warning' ? 'warn' : 'ok');
 }
 
-function regionImage(region: string, className: string): HTMLImageElement | null {
+function regionFlag(region: string, className: string): HTMLImageElement | null {
   const code = normalizeRegionCode(region);
   if (!code) {
     return null;
   }
-  const image = element('img', className);
-  image.src = regionFlagDataUrl(code);
-  image.alt = `${code} flag`;
-  image.title = code;
-  return image;
+  const flag = element('img', className);
+  flag.src = regionFlagUrl(code);
+  flag.alt = `${code} flag`;
+  flag.title = code;
+  flag.addEventListener('error', () => {
+    if (flag.dataset.fallback === 'true') {
+      return;
+    }
+    flag.dataset.fallback = 'true';
+    flag.src = regionFlagUrl('');
+  });
+  return flag;
 }
 
-function resourceCell(value: number | null, online: boolean): HTMLDivElement {
-  const cell = element('div', 'resource');
+function resourceCell(value: number | null, online: boolean, label: 'cpu' | 'mem' | 'disk'): HTMLDivElement {
+  const cell = element('div', `resource resource-${label}`);
+  cell.dataset.mobileLabel = label.toUpperCase();
   if (value === null || !Number.isFinite(value) || !online) {
     const unavailable = element('span', online ? 'muted' : 'danger');
     unavailable.textContent = '--';
@@ -59,6 +67,7 @@ function resourceRatio(used: number | undefined, total: number | undefined): num
 
 function networkCell(node: NodeState): HTMLDivElement {
   const cell = element('div', 'network');
+  cell.dataset.mobileLabel = 'NETWORK';
   const report = node.report?.network;
   for (const [direction, value] of [['down', report?.down], ['up', report?.up]] as const) {
     const speed = element('span', `direction ${direction}`);
@@ -81,6 +90,7 @@ function networkCell(node: NodeState): HTMLDivElement {
 
 function trafficCell(node: NodeState): HTMLDivElement {
   const cell = element('div', 'traffic');
+  cell.dataset.mobileLabel = 'TRAFFIC';
   const network = node.report?.network;
   const hasTotals = network !== null && network !== undefined;
   const current = element('div', 'traffic-current');
@@ -129,7 +139,7 @@ function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeLis
   const status = element('span', `node-status ${node.online ? 'online' : 'offline'}`);
   status.textContent = '●';
   status.setAttribute('aria-label', node.online ? 'online' : 'offline');
-  const region = regionImage(node.metadata.region, 'node-flag');
+  const region = regionFlag(node.metadata.region, 'node-flag');
   if (region) {
     nodeCell.append(status, region);
   } else {
@@ -144,9 +154,9 @@ function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeLis
   const report = node.report;
   row.replaceChildren(
     nodeCell,
-    resourceCell(report?.cpuUsage ?? null, node.online),
-    resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online),
-    resourceCell(resourceRatio(report?.disk?.used, report?.disk?.total), node.online),
+    resourceCell(report?.cpuUsage ?? null, node.online, 'cpu'),
+    resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online, 'mem'),
+    resourceCell(resourceRatio(report?.disk?.used, report?.disk?.total), node.online, 'disk'),
     networkCell(node),
     trafficCell(node),
   );

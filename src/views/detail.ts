@@ -1,7 +1,7 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
 import { LATENCY_RANGES } from '../latency';
-import { normalizeRegionCode, regionFlagDataUrl } from '../region';
+import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
 
 export type DetailHandlers = {
@@ -33,9 +33,16 @@ function updateDetailName(container: HTMLElement, node: NodeState | null): void 
   const code = normalizeRegionCode(node?.metadata.region);
   if (code) {
     const region = element('img', 'detail-flag');
-    region.src = regionFlagDataUrl(code);
+    region.src = regionFlagUrl(code);
     region.alt = `${code} flag`;
     region.title = code;
+    region.addEventListener('error', () => {
+      if (region.dataset.fallback === 'true') {
+        return;
+      }
+      region.dataset.fallback = 'true';
+      region.src = regionFlagUrl('');
+    });
     container.append(region);
   }
   const name = element('span', 'detail-name-text');
@@ -67,12 +74,16 @@ function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
   if (!node.online) {
     tones.fill('danger');
   }
+  const labels = ['CPU', 'MEM', 'DISK', 'NETWORK', 'TRAFFIC'] as const;
   values.forEach((value, index) => {
-    const metric = element('div', tones[index] ?? 'muted');
+    const label = labels[index] ?? 'METRIC';
+    const metric = element('div', `metric metric-${label.toLowerCase()} ${tones[index] ?? 'muted'}`);
+    metric.dataset.mobileLabel = label;
     if (index === 3 && report?.network) {
-      metric.className = 'metric-network';
+      metric.className = `metric metric-network ${tones[index] ?? 'muted'}`;
       for (const [direction, value] of [['down', report.network.down], ['up', report.network.up]] as const) {
-        const item = element('span', `metric-direction ${networkTone(value) === 'warning' ? 'warn' : 'ok'}`);
+        const tone = !node.online ? 'danger' : networkTone(value) === 'warning' ? 'warn' : 'ok';
+        const item = element('span', `metric-direction ${tone}`);
         const arrow = element('span', 'direction-arrow');
         arrow.textContent = direction === 'down' ? '↓' : '↑';
         const text = element('span', 'direction-value');

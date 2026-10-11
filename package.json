@@ -1,14 +1,15 @@
 {
   "name": "komari-btop-minimal",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "vite build",
+    "build": "npm run prepare:flags && vite build",
+    "prepare:flags": "node scripts/prepare-flags.mjs",
     "package": "npm run build && node scripts/package.mjs"
   },
   "devDependencies": {
@@ -17,5 +18,8 @@
     "typescript": "latest",
     "vite": "latest",
     "vitest": "latest"
+  },
+  "dependencies": {
+    "flag-icons": "^7.5.0"
   }
 }

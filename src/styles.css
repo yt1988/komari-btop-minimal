@@ -1,4 +1,6 @@
 :root {
+  --duplex-column: 12.5ch;
+  --duplex-gap: 8px;
   color-scheme: dark;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 14px;
@@ -14,9 +16,9 @@
 }
 
 body {
-  min-width: 320px;
   min-height: 100vh;
   margin: 0;
+  overflow-x: clip;
   background: #030805;
   background-image: repeating-linear-gradient(to bottom, rgba(255, 255, 255, 0.018) 0, rgba(255, 255, 255, 0.018) 1px, transparent 1px, transparent 3px);
   color: #35f477;
@@ -120,10 +122,12 @@ button {
 .metric-table {
   width: 100%;
   max-width: 100%;
-  overflow-x: auto;
+  overflow-x: clip;
   overflow-y: visible;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-color: #178e48 #07130b;
+}
+
+.table {
+  min-width: 0;
 }
 
 .head,
@@ -228,8 +232,9 @@ button {
 
 .network {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(10px, 1.2vw, 18px);
+  grid-template-columns: repeat(2, minmax(0, var(--duplex-column)));
+  gap: var(--duplex-gap);
+  justify-content: start;
   min-width: 0;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -272,8 +277,9 @@ button {
 
 .traffic-current {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(10px, 1.2vw, 18px);
+  grid-template-columns: repeat(2, minmax(0, var(--duplex-column)));
+  gap: var(--duplex-gap);
+  justify-content: start;
 }
 
 .traffic.has-no-limit {
@@ -285,6 +291,8 @@ button {
 }
 
 .traffic-limit {
+  width: calc(var(--duplex-column) * 2 + var(--duplex-gap));
+  max-width: 100%;
   gap: 6px;
   color: #35f477;
   font-size: 11px;
@@ -303,9 +311,10 @@ button {
 
 .limit-track {
   display: block;
-  width: 46px;
+  width: auto;
   height: 5px;
-  flex: 0 0 46px;
+  min-width: 28px;
+  flex: 1 1 auto;
   background: #0d3a20;
 }
 
@@ -397,7 +406,7 @@ button {
 .metric-network {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--duplex-gap);
 }
 
 .metric-direction {
@@ -574,9 +583,9 @@ footer {
   }
 }
 
-@media (max-width: 700px) {
+@media (max-width: 1240px) {
   .terminal {
-    padding: 18px 14px;
+    padding: 20px clamp(14px, 4vw, 28px);
   }
 
   .header {
@@ -591,16 +600,169 @@ footer {
     order: 2;
   }
 
-  .head,
-  .row {
-    grid-template-columns: minmax(180px, 1.25fr) repeat(3, minmax(118px, .8fr)) minmax(220px, 1.2fr) minmax(240px, 1.3fr);
-    gap: 12px;
-    min-width: 1050px;
+  .table-scroll,
+  .metric-table {
+    overflow-x: clip;
   }
 
+  .head {
+    display: none;
+  }
+
+  .row {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-areas:
+      'node node node node node node'
+      'cpu cpu mem mem disk disk'
+      'network network network traffic traffic traffic';
+    gap: 10px 12px;
+    padding: 12px 0;
+  }
+
+  .node {
+    grid-area: node;
+  }
+
+  .resource-cpu {
+    grid-area: cpu;
+  }
+
+  .resource-mem {
+    grid-area: mem;
+  }
+
+  .resource-disk {
+    grid-area: disk;
+  }
+
+  .resource,
   .network,
+  .traffic {
+    min-width: 0;
+  }
+
+  .resource {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px 4px;
+  }
+
+  .resource::before,
+  .network::before,
+  .traffic::before,
+  .metric::before {
+    display: block;
+    color: #178e48;
+    content: attr(data-mobile-label);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    line-height: 13px;
+  }
+
+  .resource::before,
+  .network::before,
+  .traffic::before {
+    grid-column: 1 / -1;
+  }
+
+  .resource-bar {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 11px;
+    letter-spacing: -0.16em;
+    text-overflow: clip;
+  }
+
+  .percent {
+    font-size: 12px;
+  }
+
+  .network {
+    grid-area: network;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--duplex-gap);
+  }
+
+  .traffic {
+    grid-area: traffic;
+    grid-template-rows: 13px 18px 15px;
+    gap: 3px;
+    min-height: 49px;
+  }
+
+  .traffic.has-no-limit {
+    grid-template-rows: 13px 18px 15px;
+  }
+
   .traffic-current {
-    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--duplex-gap);
+  }
+
+  .traffic-limit {
+    width: 100%;
+  }
+
+  .detail-control {
+    flex-wrap: wrap;
+    gap: 6px 18px;
+  }
+
+  .detail-status {
+    margin-left: auto;
+  }
+
+  .detail-name {
+    margin-top: 28px;
+  }
+
+  .metric-head {
+    display: none;
+  }
+
+  .metric-row {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      'cpu mem disk'
+      'network network traffic';
+    gap: 12px 18px;
+    padding-bottom: 16px;
+  }
+
+  .metric {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .metric-cpu {
+    grid-area: cpu;
+  }
+
+  .metric-mem {
+    grid-area: mem;
+  }
+
+  .metric-disk {
+    grid-area: disk;
+  }
+
+  .metric-network {
+    grid-area: network;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--duplex-gap);
+  }
+
+  .metric-network::before {
+    grid-column: 1 / -1;
+  }
+
+  .metric-traffic {
+    grid-area: traffic;
   }
 
   .latency-heading {
@@ -619,6 +781,61 @@ footer {
   .powered {
     padding-right: 18px;
     padding-left: 18px;
+  }
+}
+
+@media (max-width: 700px) {
+  .row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      'node node node'
+      'cpu mem disk'
+      'network network network'
+      'traffic traffic traffic';
+  }
+
+  .metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      'cpu mem'
+      'disk disk'
+      'network network'
+      'traffic traffic';
+  }
+}
+
+@media (max-width: 420px) {
+  .row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      'node node'
+      'cpu mem'
+      'disk disk'
+      'network network'
+      'traffic traffic';
+  }
+
+  .resource-bar {
+    font-size: 12px;
+    letter-spacing: -0.12em;
+  }
+
+  .metric-row {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'cpu'
+      'mem'
+      'disk'
+      'network'
+      'traffic';
+  }
+
+  .metric-cpu,
+  .metric-mem,
+  .metric-disk,
+  .metric-network,
+  .metric-traffic {
+    width: 100%;
   }
 }
 

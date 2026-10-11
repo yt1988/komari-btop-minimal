@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeRegionCode, normalizeRegionFlag, regionFlagSvg } from '../src/region';
+import {
+  normalizeRegionCode,
+  normalizeRegionFlag,
+  regionFlagUrl,
+} from '../src/region';
 
 describe('node region flags', () => {
   it('maps Taiwan variants to the China flag', () => {
@@ -15,10 +19,12 @@ describe('node region flags', () => {
     expect(normalizeRegionFlag('')).toBe('');
   });
 
-  it('provides a Windows-safe country code and inline flag graphic', () => {
+  it('provides a Windows-safe country code and local flag asset URL', () => {
     expect(normalizeRegionCode('🇹🇼')).toBe('CN');
     expect(normalizeRegionCode('jp')).toBe('JP');
-    expect(regionFlagSvg('CN')).toContain('<svg');
-    expect(regionFlagSvg('CN')).not.toContain('🇨🇳');
+    expect(regionFlagUrl('CN')).toBe('/flags/cn.svg');
+    expect(regionFlagUrl('HK')).toBe('/flags/hk.svg');
+    expect(regionFlagUrl('ZZ')).toBe('/flags/xx.svg');
+    expect(regionFlagUrl('not-a-country')).toBe('/flags/xx.svg');
   });
 });
