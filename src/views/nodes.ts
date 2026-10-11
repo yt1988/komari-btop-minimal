@@ -1,5 +1,5 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
-import { normalizeRegionFlag } from '../region';
+import { normalizeRegionCode, regionFlagDataUrl } from '../region';
 import { getTrafficPresentation } from '../traffic';
 import type { NodeState } from '../domain';
 
@@ -18,6 +18,18 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
 
 function addTone(node: HTMLElement, tone: 'normal' | 'warning', online: boolean): void {
   node.classList.add(!online ? 'danger' : tone === 'warning' ? 'warn' : 'ok');
+}
+
+function regionImage(region: string, className: string): HTMLImageElement | null {
+  const code = normalizeRegionCode(region);
+  if (!code) {
+    return null;
+  }
+  const image = element('img', className);
+  image.src = regionFlagDataUrl(code);
+  image.alt = `${code} flag`;
+  image.title = code;
+  return image;
 }
 
 function resourceCell(value: number | null, online: boolean): HTMLDivElement {
@@ -49,11 +61,15 @@ function networkCell(node: NodeState): HTMLDivElement {
   const cell = element('div', 'network');
   const report = node.report?.network;
   for (const [direction, value] of [['down', report?.down], ['up', report?.up]] as const) {
-    const speed = element('span', direction);
-    speed.textContent = `${direction === 'down' ? '↓' : '↑'} ${node.online && value !== undefined ? formatSpeed(value) : '--'}`;
+    const speed = element('span', `direction ${direction}`);
+    const arrow = element('span', 'direction-arrow');
+    arrow.textContent = direction === 'down' ? '↓' : '↑';
+    const text = element('span', 'direction-value');
+    text.textContent = node.online && typeof value === 'number' ? formatSpeed(value) : '--';
+    speed.append(arrow, text);
     if (!node.online) {
       speed.classList.add('danger');
-    } else if (value === undefined) {
+    } else if (typeof value !== 'number') {
       speed.classList.add('muted');
     } else {
       addTone(speed, networkTone(value), true);
@@ -69,8 +85,12 @@ function trafficCell(node: NodeState): HTMLDivElement {
   const hasTotals = network !== null && network !== undefined;
   const current = element('div', 'traffic-current');
   for (const [direction, value] of [['down', network?.totalDown], ['up', network?.totalUp]] as const) {
-    const total = element('span', !node.online && hasTotals ? 'danger' : hasTotals ? 'ok' : node.online ? 'muted' : 'danger');
-    total.textContent = `${direction === 'down' ? '↓' : '↑'} ${hasTotals && value !== undefined ? formatBytes(value) : '--'}`;
+    const total = element('span', `direction ${direction} ${!node.online && hasTotals ? 'danger' : hasTotals ? 'ok' : node.online ? 'muted' : 'danger'}`);
+    const arrow = element('span', 'direction-arrow');
+    arrow.textContent = direction === 'down' ? '↓' : '↑';
+    const text = element('span', 'direction-value');
+    text.textContent = hasTotals && typeof value === 'number' ? formatBytes(value) : '--';
+    total.append(arrow, text);
     current.append(total);
   }
   cell.append(current);
@@ -109,10 +129,8 @@ function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeLis
   const status = element('span', `node-status ${node.online ? 'online' : 'offline'}`);
   status.textContent = '●';
   status.setAttribute('aria-label', node.online ? 'online' : 'offline');
-  const flag = normalizeRegionFlag(node.metadata.region);
-  if (flag) {
-    const region = element('span', 'node-flag');
-    region.textContent = flag;
+  const region = regionImage(node.metadata.region, 'node-flag');
+  if (region) {
     nodeCell.append(status, region);
   } else {
     nodeCell.append(status);

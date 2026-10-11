@@ -8,6 +8,10 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
+export type PublicSettings = {
+  siteName: string;
+};
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -107,6 +111,12 @@ export function parseNodeMetadata(raw: unknown): NodeMetadata[] {
       trafficLimitType: asString(node.traffic_limit_type, 'max'),
     };
   }).sort((left, right) => left.weight - right.weight);
+}
+
+export function parsePublicSettings(raw: unknown): PublicSettings {
+  const settings = asObject(unwrapStandardResponse(raw, '/api/public'), '/api/public');
+  const siteName = asString(settings.sitename).trim();
+  return { siteName: siteName || 'Komari' };
 }
 
 export function parsePingTasks(raw: unknown): PingTask[] {
@@ -218,6 +228,10 @@ async function fetchJson(path: string, init?: RequestInit): Promise<unknown> {
 
 export async function fetchNodeMetadata(signal?: AbortSignal): Promise<NodeMetadata[]> {
   return parseNodeMetadata(await fetchJson('/api/nodes', { signal }));
+}
+
+export async function fetchPublicSettings(signal?: AbortSignal): Promise<PublicSettings> {
+  return parsePublicSettings(await fetchJson('/api/public', { signal }));
 }
 
 export async function fetchPingTasks(signal?: AbortSignal): Promise<PingTask[]> {

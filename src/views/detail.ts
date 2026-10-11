@@ -1,7 +1,7 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
 import { LATENCY_RANGES } from '../latency';
-import { normalizeRegionFlag } from '../region';
+import { normalizeRegionCode, regionFlagDataUrl } from '../region';
 import { renderLatencyChart } from './chart';
 
 export type DetailHandlers = {
@@ -30,10 +30,12 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
 
 function updateDetailName(container: HTMLElement, node: NodeState | null): void {
   container.replaceChildren();
-  const flag = normalizeRegionFlag(node?.metadata.region);
-  if (flag) {
-    const region = element('span', 'detail-flag');
-    region.textContent = flag;
+  const code = normalizeRegionCode(node?.metadata.region);
+  if (code) {
+    const region = element('img', 'detail-flag');
+    region.src = regionFlagDataUrl(code);
+    region.alt = `${code} flag`;
+    region.title = code;
     container.append(region);
   }
   const name = element('span', 'detail-name-text');
@@ -68,13 +70,18 @@ function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
   values.forEach((value, index) => {
     const metric = element('div', tones[index] ?? 'muted');
     if (index === 3 && report?.network) {
-      const down = element('span', networkTone(report.network.down) === 'warning' ? 'warn' : 'ok');
-      down.textContent = `↓ ${formatSpeed(report.network.down)}`;
-      const up = element('span', networkTone(report.network.up) === 'warning' ? 'warn' : 'ok');
-      up.textContent = `↑ ${formatSpeed(report.network.up)}`;
-      metric.append(down, document.createTextNode('  '), up);
+      metric.className = 'metric-network';
+      for (const [direction, value] of [['down', report.network.down], ['up', report.network.up]] as const) {
+        const item = element('span', `metric-direction ${networkTone(value) === 'warning' ? 'warn' : 'ok'}`);
+        const arrow = element('span', 'direction-arrow');
+        arrow.textContent = direction === 'down' ? '↓' : '↑';
+        const text = element('span', 'direction-value');
+        text.textContent = formatSpeed(value);
+        item.append(arrow, text);
+        metric.append(item);
+      }
       if (!node.online) {
-        metric.className = 'danger';
+        metric.classList.add('danger');
       }
     } else if (index === 3) {
       metric.textContent = '--';

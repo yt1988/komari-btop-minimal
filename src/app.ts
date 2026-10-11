@@ -3,14 +3,14 @@ import {
   fetchLatency,
   fetchNodeMetadata,
   fetchPingTasks,
+  fetchPublicSettings,
 } from './api/komari';
 import type { LatencyQuery, LiveReport, NodeMetadata, NodeState, PingTask } from './domain';
 import { formatTimestamp } from './format';
 import { toggleVisibleTasks } from './latency';
+import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
-
-type Route = { type: 'nodes' } | { type: 'detail'; uuid: string };
 
 type LatencyStatus = 'loading' | 'ready' | 'error';
 
@@ -68,17 +68,13 @@ function liveReportChanged(previous: LiveReport | undefined, next: LiveReport): 
     || !sameNetwork(previous?.network ?? null, next.network);
 }
 
-function parseRoute(): Route {
-  const hash = window.location.hash || '#/nodes';
-  const match = hash.match(/^#\/nodes(?:\/([^/?#]+))?\/?$/);
-  if (!match?.[1]) {
-    return { type: 'nodes' };
-  }
-  try {
-    return { type: 'detail', uuid: decodeURIComponent(match[1]) };
-  } catch {
-    return { type: 'detail', uuid: match[1] };
-  }
+function currentRoute(): Route {
+  return parseBrowserRoute(window.location.pathname, window.location.hash);
+}
+
+function navigate(route: Route): void {
+  window.history.pushState(null, '', routePath(route));
+  window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
 function routeKey(route: Route): string {
@@ -111,10 +107,15 @@ function allTaskIds(state: ApplicationState, uuid: string): string[] {
 }
 
 export function startApp(root: HTMLElement): () => void {
-  root.innerHTML = '<div class="terminal"><header class="header"><div><span class="prompt">visitor@komari:~$</span> nodes</div><div class="header-right" data-role="last-update">last update: --</div></header><main data-role="page"></main></div>';
+  const migratedPath = legacyRoutePath(window.location.hash);
+  if (migratedPath !== null) {
+    window.history.replaceState(null, '', migratedPath);
+  }
+  root.innerHTML = '<div class="terminal"><header class="header"><div><span class="prompt" data-role="site-name">Komari</span>:~$ nodes</div><div class="header-right" data-role="last-update">last update: --</div></header><main data-role="page"></main></div>';
   const page = root.querySelector<HTMLElement>('[data-role="page"]');
   const timestamp = root.querySelector<HTMLElement>('[data-role="last-update"]');
-  if (!page || !timestamp) {
+  const siteName = root.querySelector<HTMLElement>('[data-role="site-name"]');
+  if (!page || !timestamp || !siteName) {
     throw new Error('Missing application shell elements');
   }
 
@@ -128,7 +129,7 @@ export function startApp(root: HTMLElement): () => void {
     metadataFailed: false,
     selectedGroup: 'all',
     lastUpdate: null,
-    route: parseRoute(),
+    route: currentRoute(),
     routeKey: '',
     latencyRange: 24,
     latency: null,
@@ -162,13 +163,23 @@ export function startApp(root: HTMLElement): () => void {
     timestamp.textContent = formatRefreshTime(state.lastUpdate);
   };
 
+  const loadSiteName = async (): Promise<void> => {
+    try {
+      const settings = await fetchPublicSettings();
+      if (!stopped) {
+        siteName.textContent = settings.siteName;
+      }
+    } catch {
+    }
+  };
+
   const nodeHandlers = {
     onGroupSelect: (group: string) => {
       state.selectedGroup = group;
       render();
     },
     onNodeSelect: (uuid: string) => {
-      window.location.hash = `#/nodes/${encodeURIComponent(uuid)}`;
+      navigate({ type: 'detail', uuid });
     },
   };
 
@@ -200,7 +211,7 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const render = (): void => {
-    state.route = parseRoute();
+    state.route = currentRoute();
     updateTimestamp();
     if (!state.metadataReady && state.nodes.length === 0) {
       const loading = document.createElement('div');
@@ -222,7 +233,7 @@ export function startApp(root: HTMLElement): () => void {
       state.visibleTaskIds = null;
       visible = ids;
     }
-    const currentRoute = state.route;
+    const detailRoute = state.route;
     renderDetailView(page, {
       node: getCurrentNode(),
       tasks: state.tasks,
@@ -232,17 +243,17 @@ export function startApp(root: HTMLElement): () => void {
       visibleTaskIds: visible,
       handlers: {
         onBack: () => {
-          window.location.hash = '';
+          navigate({ type: 'nodes' });
         },
         onRangeChange: (hours) => {
           if (state.latencyRange === hours) {
             return;
           }
           state.latencyRange = hours;
-          loadLatency(currentRoute.uuid, hours);
+            loadLatency(detailRoute.uuid, hours);
         },
         onTaskToggle: (taskId) => {
-          const currentIds = allTaskIds(state, currentRoute.uuid);
+            const currentIds = allTaskIds(state, detailRoute.uuid);
           const currentVisible = state.visibleTaskIds === null ? currentIds : state.visibleTaskIds;
           state.visibleTaskIds = toggleVisibleTasks(currentIds, currentVisible, taskId);
           render();
@@ -276,7 +287,7 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const syncRoute = (): void => {
-    const route = parseRoute();
+    const route = currentRoute();
     const key = routeKey(route);
     if (key === state.routeKey) {
       return;
@@ -370,10 +381,16 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const handleRouteChange = (): void => {
+    const migratedPath = legacyRoutePath(window.location.hash);
+    if (migratedPath !== null) {
+      window.history.replaceState(null, '', migratedPath);
+    }
     syncRoute();
   };
 
+  window.addEventListener('popstate', handleRouteChange);
   window.addEventListener('hashchange', handleRouteChange);
+  void loadSiteName();
   void refreshMetadata();
   liveSocket = createLiveSocket({
     scope: 'all',
@@ -398,6 +415,7 @@ export function startApp(root: HTMLElement): () => void {
     if (metadataTimer !== null) {
       clearInterval(metadataTimer);
     }
+    window.removeEventListener('popstate', handleRouteChange);
     window.removeEventListener('hashchange', handleRouteChange);
   };
 }

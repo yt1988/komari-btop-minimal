@@ -4,6 +4,7 @@ import {
   parseLiveSnapshot,
   parseNodeMetadata,
   parsePingTasks,
+  parsePublicSettings,
   unwrapStandardResponse,
 } from '../src/api/komari';
 
@@ -88,6 +89,17 @@ describe('Komari response normalization', () => {
         },
       },
     });
+  });
+
+  it('reads the public site name with a safe terminal fallback', () => {
+    expect(parsePublicSettings({
+      status: 'success',
+      data: { sitename: 'Taos' },
+    })).toEqual({ siteName: 'Taos' });
+    expect(parsePublicSettings({
+      status: 'success',
+      data: { sitename: '   ' },
+    })).toEqual({ siteName: 'Komari' });
   });
 
   it('normalizes latency series tags and timestamps', () => {

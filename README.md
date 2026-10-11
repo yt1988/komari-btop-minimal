@@ -2,6 +2,8 @@
 
 一个面向个人探针的极简 Komari 主题，以经典命令行监控工具 btop 为视觉参考。
 
+![Btop Minimal theme preview](./preview.png)
+
 ## 特性
 
 - 单行节点列表：节点名、国旗、CPU、内存、磁盘、网络速度和累计流量。
@@ -32,6 +34,8 @@ npm run package
 # Btop Minimal for Komari
 
 A minimal Komari theme for personal monitoring, inspired by the classic command-line monitor btop.
+
+![Btop Minimal theme preview](./preview.png)
 
 ## Features
 
