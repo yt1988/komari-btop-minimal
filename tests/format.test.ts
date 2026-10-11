@@ -9,11 +9,13 @@ import {
 } from '../src/format';
 
 describe('terminal formatting', () => {
-  it('formats binary byte and speed values', () => {
+  it('formats binary byte values and compact speed units', () => {
     expect(formatBytes(0)).toBe('0 B');
     expect(formatBytes(1024)).toBe('1.0 KiB');
     expect(formatBytes(1024 ** 2)).toBe('1.0 MiB');
-    expect(formatSpeed(1024 ** 2)).toBe('1.0 MiB/s');
+    expect(formatSpeed(1024)).toBe('1.0 KB/s');
+    expect(formatSpeed(1024 ** 2)).toBe('1.0 MB/s');
+    expect(formatSpeed(1024 ** 3)).toBe('1.0 GB/s');
     expect(formatBytes(null)).toBe('--');
     expect(formatSpeed(Number.NaN)).toBe('--');
   });
@@ -24,6 +26,7 @@ describe('terminal formatting', () => {
     expect(formatPercent(110)).toBe('100%');
     expect(progressBar(0, 5)).toBe('░░░░░');
     expect(progressBar(1, 5)).toBe('█░░░░');
+    expect(progressBar(27, 100, 10)).toBe('███░░░░░░░');
     expect(progressBar(1.1, 1, 5)).toBe('█████');
   });
 

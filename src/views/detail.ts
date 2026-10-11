@@ -1,6 +1,7 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
 import { LATENCY_RANGES } from '../latency';
+import { normalizeRegionFlag } from '../region';
 import { renderLatencyChart } from './chart';
 
 export type DetailHandlers = {
@@ -25,6 +26,19 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
     node.className = className;
   }
   return node;
+}
+
+function updateDetailName(container: HTMLElement, node: NodeState | null): void {
+  container.replaceChildren();
+  const flag = normalizeRegionFlag(node?.metadata.region);
+  if (flag) {
+    const region = element('span', 'detail-flag');
+    region.textContent = flag;
+    container.append(region);
+  }
+  const name = element('span', 'detail-name-text');
+  name.textContent = node?.metadata.name ?? '';
+  container.append(name);
 }
 
 function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
@@ -84,8 +98,8 @@ function renderCore(container: HTMLElement, node: NodeState | null): void {
   control.append(back, status);
 
   const title = element('h2', 'detail-name');
-  title.textContent = node?.metadata.name ?? '';
   title.dataset.role = 'name';
+  updateDetailName(title, node);
 
   const table = element('div', 'metric-table');
   const heading = element('div', 'metric-head');
@@ -109,7 +123,7 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null)
   }
   status.className = `detail-status ${node?.online ? 'ok' : 'danger'}`;
   status.textContent = node ? `● ${node.online ? 'online' : 'offline'}` : '';
-  title.textContent = node?.metadata.name ?? '';
+  updateDetailName(title, node);
   appendMetricRow(row, node);
 }
 
@@ -143,6 +157,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   title.textContent = 'latency';
   heading.append(title);
 
+  const controls = element('div', 'latency-left');
   const ranges = element('div', 'range-set');
   LATENCY_RANGES.forEach((range) => {
     const button = element('button', `range${options.latencyRange === range.hours ? ' active' : ''}`);
@@ -152,7 +167,8 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     button.addEventListener('click', () => options.handlers.onRangeChange(range.hours));
     ranges.append(button);
   });
-  heading.append(ranges);
+  controls.append(title, ranges);
+  heading.append(controls);
 
   const probes = element('div', 'probe-set');
   taskIds.forEach((taskId) => {

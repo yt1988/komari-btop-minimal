@@ -17,6 +17,46 @@ export type LatencySegment = {
   tone: LatencyTone;
 };
 
+function nearestLatencyPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {
+  let nearest: { timestamp: number; value: number } | null = null;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const point of series.points) {
+    if (typeof point.value !== 'number' || !Number.isFinite(point.value) || point.value < 0) {
+      continue;
+    }
+    const candidateDistance = Math.abs(point.timestamp - timestamp);
+    if (candidateDistance < distance) {
+      nearest = point as { timestamp: number; value: number };
+      distance = candidateDistance;
+    }
+  }
+  return nearest;
+}
+
+export function formatLatencyTimestamp(timestamp: number, rangeHours: number): string {
+  const date = new Date(timestamp);
+  if (rangeHours <= 24) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return `${date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+}
+
+export function formatLatencyReadout(
+  timestamp: number,
+  series: LatencySeries[],
+  labels: Map<string, string>,
+  rangeHours: number,
+): string {
+  const values = [formatLatencyTimestamp(timestamp, rangeHours)];
+  for (const lineSeries of series) {
+    const point = nearestLatencyPoint(lineSeries, timestamp);
+    if (point) {
+      values.push(`${labels.get(lineSeries.taskId) ?? lineSeries.label} ${point.value.toFixed(1)}ms`);
+    }
+  }
+  return values.join(' · ');
+}
+
 export function toggleVisibleTasks(
   allTaskIds: string[],
   visibleTaskIds: string[],

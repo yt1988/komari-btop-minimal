@@ -1,13 +1,18 @@
 export type MetricTone = 'normal' | 'warning';
 
 const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const;
+const SPEED_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const;
 const MIB = 1024 ** 2;
 
 function finiteNonNegative(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function formatScaled(value: number | null | undefined, suffix: string): string {
+function formatScaled(
+  value: number | null | undefined,
+  units: readonly string[],
+  suffix: string,
+): string {
   const safeValue = finiteNonNegative(value);
   if (safeValue === null) {
     return '--';
@@ -15,12 +20,12 @@ function formatScaled(value: number | null | undefined, suffix: string): string 
 
   let scaled = safeValue;
   let unitIndex = 0;
-  while (scaled >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
     scaled /= 1024;
     unitIndex += 1;
   }
 
-  const unit = BYTE_UNITS[unitIndex] ?? 'B';
+  const unit = units[unitIndex] ?? units[0] ?? 'B';
   if (unitIndex === 0) {
     return `${Math.round(scaled)} ${unit}${suffix}`;
   }
@@ -28,11 +33,11 @@ function formatScaled(value: number | null | undefined, suffix: string): string 
 }
 
 export function formatBytes(value: number | null | undefined): string {
-  return formatScaled(value, '');
+  return formatScaled(value, BYTE_UNITS, '');
 }
 
 export function formatSpeed(value: number | null | undefined): string {
-  return formatScaled(value, '/s');
+  return formatScaled(value, SPEED_UNITS, '/s');
 }
 
 export function formatPercent(value: number | null | undefined): string {

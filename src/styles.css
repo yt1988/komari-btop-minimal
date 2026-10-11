@@ -159,6 +159,14 @@ button {
   font-size: 12px;
 }
 
+.node-flag,
+.detail-flag {
+  flex: 0 0 auto;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+  font-size: 14px;
+  line-height: 1;
+}
+
 .node-status.online {
   color: #35f477;
 }
@@ -306,6 +314,9 @@ button {
 }
 
 .detail-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 24px 0 18px;
   color: #35f477;
   font-size: 18px;
@@ -351,6 +362,13 @@ button {
   margin-bottom: 12px;
 }
 
+.latency-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+}
+
 .latency-heading strong {
   color: #35f477;
   font-weight: 700;
@@ -359,6 +377,11 @@ button {
 .range-set,
 .probe-set {
   gap: 14px;
+}
+
+.probe-set {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .range,
@@ -384,6 +407,7 @@ button {
 }
 
 .graph-area {
+  position: relative;
   min-width: 0;
 }
 
@@ -441,11 +465,21 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.readout {
-  min-height: 18px;
-  margin: 7px 0 0 58px;
-  font-size: 12px;
+.chart-readout {
+  position: absolute;
+  top: 8px;
+  z-index: 1;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  padding: 2px 5px;
+  color: #35f477;
+  background: #030805e8;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .powered {
@@ -482,6 +516,7 @@ footer {
 
   .probe-set {
     flex-basis: 100%;
+    margin-left: 0;
   }
 
   .graph {

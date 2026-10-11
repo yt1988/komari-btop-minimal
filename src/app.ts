@@ -8,7 +8,7 @@ import type { LatencyQuery, LiveReport, NodeMetadata, NodeState, PingTask } from
 import { formatTimestamp } from './format';
 import { toggleVisibleTasks } from './latency';
 import { renderDetailView, updateDetailCore } from './views/detail';
-import { renderNodeList } from './views/nodes';
+import { renderNodeList, updateNodeRows } from './views/nodes';
 
 type Route = { type: 'nodes' } | { type: 'detail'; uuid: string };
 
@@ -19,6 +19,7 @@ type ApplicationState = {
   reports: Map<string, LiveReport>;
   online: Set<string>;
   tasks: PingTask[];
+  tasksReady: boolean;
   metadataReady: boolean;
   metadataFailed: boolean;
   selectedGroup: string;
@@ -30,6 +31,42 @@ type ApplicationState = {
   latencyStatus: LatencyStatus;
   visibleTaskIds: string[] | null;
 };
+
+let nodeMetadataCache: NodeMetadata[] | null = null;
+
+function isNodeMetadata(value: unknown): value is NodeMetadata {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const node = value as Partial<NodeMetadata>;
+  return typeof node.uuid === 'string'
+    && typeof node.name === 'string'
+    && typeof node.group === 'string'
+    && typeof node.region === 'string'
+    && typeof node.weight === 'number'
+    && typeof node.memTotal === 'number'
+    && typeof node.diskTotal === 'number'
+    && typeof node.trafficLimit === 'number'
+    && typeof node.trafficLimitType === 'string';
+}
+
+function sameResource(left: LiveReport['ram'], right: LiveReport['ram']): boolean {
+  return left?.total === right?.total && left?.used === right?.used;
+}
+
+function sameNetwork(left: LiveReport['network'], right: LiveReport['network']): boolean {
+  return left?.up === right?.up
+    && left?.down === right?.down
+    && left?.totalUp === right?.totalUp
+    && left?.totalDown === right?.totalDown;
+}
+
+function liveReportChanged(previous: LiveReport | undefined, next: LiveReport): boolean {
+  return previous?.cpuUsage !== next.cpuUsage
+    || !sameResource(previous?.ram ?? null, next.ram)
+    || !sameResource(previous?.disk ?? null, next.disk)
+    || !sameNetwork(previous?.network ?? null, next.network);
+}
 
 function parseRoute(): Route {
   const hash = window.location.hash || '#/nodes';
@@ -86,6 +123,7 @@ export function startApp(root: HTMLElement): () => void {
     reports: new Map(),
     online: new Set(),
     tasks: [],
+    tasksReady: false,
     metadataReady: false,
     metadataFailed: false,
     selectedGroup: 'all',
@@ -103,6 +141,7 @@ export function startApp(root: HTMLElement): () => void {
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let metadataTimer: ReturnType<typeof setInterval> | null = null;
   let liveSocket: ReturnType<typeof createLiveSocket> | null = null;
+  let pingTasksRequest: Promise<PingTask[]> | null = null;
 
   const getNodeStates = (): NodeState[] => state.nodes.map((metadata) => ({
     metadata,
@@ -123,6 +162,43 @@ export function startApp(root: HTMLElement): () => void {
     timestamp.textContent = formatRefreshTime(state.lastUpdate);
   };
 
+  const nodeHandlers = {
+    onGroupSelect: (group: string) => {
+      state.selectedGroup = group;
+      render();
+    },
+    onNodeSelect: (uuid: string) => {
+      window.location.hash = `#/nodes/${encodeURIComponent(uuid)}`;
+    },
+  };
+
+  const ensurePingTasks = (): Promise<PingTask[]> => {
+    if (state.tasksReady) {
+      return Promise.resolve(state.tasks);
+    }
+    if (pingTasksRequest !== null) {
+      return pingTasksRequest;
+    }
+    pingTasksRequest = fetchPingTasks().then((tasks) => {
+      if (!stopped) {
+        state.tasks = tasks;
+        state.tasksReady = true;
+        if (state.route.type === 'detail') {
+          render();
+        }
+      }
+      return tasks;
+    }).catch(() => {
+      if (!stopped) {
+        state.tasksReady = true;
+      }
+      return [];
+    }).finally(() => {
+      pingTasksRequest = null;
+    });
+    return pingTasksRequest;
+  };
+
   const render = (): void => {
     state.route = parseRoute();
     updateTimestamp();
@@ -134,15 +210,7 @@ export function startApp(root: HTMLElement): () => void {
       return;
     }
     if (state.route.type === 'nodes') {
-      renderNodeList(page, getNodeStates(), state.selectedGroup, {
-        onGroupSelect: (group) => {
-          state.selectedGroup = group;
-          render();
-        },
-        onNodeSelect: (uuid) => {
-          window.location.hash = `#/nodes/${encodeURIComponent(uuid)}`;
-        },
-      }, state.metadataFailed ? 'unable to load nodes' : 'no nodes');
+      renderNodeList(page, getNodeStates(), state.selectedGroup, nodeHandlers, state.metadataFailed ? 'unable to load nodes' : 'no nodes');
       return;
     }
 
@@ -164,7 +232,7 @@ export function startApp(root: HTMLElement): () => void {
       visibleTaskIds: visible,
       handlers: {
         onBack: () => {
-          window.location.hash = '#/nodes';
+          window.location.hash = '';
         },
         onRangeChange: (hours) => {
           if (state.latencyRange === hours) {
@@ -221,6 +289,7 @@ export function startApp(root: HTMLElement): () => void {
     state.latencyStatus = 'loading';
     state.visibleTaskIds = null;
     if (route.type === 'detail' && state.metadataReady && state.nodes.some((node) => node.uuid === route.uuid)) {
+      void ensurePingTasks();
       loadLatency(route.uuid, state.latencyRange);
     } else {
       render();
@@ -228,18 +297,37 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const refreshMetadata = async (): Promise<void> => {
-    const [nodesResult, tasksResult] = await Promise.allSettled([fetchNodeMetadata(), fetchPingTasks()]);
+    if (nodeMetadataCache === null) {
+      try {
+        const cached = window.sessionStorage.getItem('komari-btop-minimal:nodes:v1');
+        const parsed: unknown = cached ? JSON.parse(cached) : null;
+        if (Array.isArray(parsed) && parsed.every(isNodeMetadata)) {
+          nodeMetadataCache = parsed;
+        }
+      } catch {
+        nodeMetadataCache = null;
+      }
+    }
+    if (nodeMetadataCache !== null && state.nodes.length === 0) {
+      state.nodes = nodeMetadataCache;
+      state.metadataReady = true;
+      render();
+    }
+    const nodesResult = await Promise.allSettled([fetchNodeMetadata()]);
     if (stopped) {
       return;
     }
-    if (nodesResult.status === 'fulfilled') {
-      state.nodes = nodesResult.value;
+    const nodeResult = nodesResult[0];
+    if (nodeResult?.status === 'fulfilled') {
+      state.nodes = nodeResult.value;
+      nodeMetadataCache = state.nodes;
+      try {
+        window.sessionStorage.setItem('komari-btop-minimal:nodes:v1', JSON.stringify(state.nodes));
+      } catch {
+      }
       state.metadataFailed = false;
     } else {
-      state.metadataFailed = true;
-    }
-    if (tasksResult.status === 'fulfilled') {
-      state.tasks = tasksResult.value;
+      state.metadataFailed = state.nodes.length === 0;
     }
     state.metadataReady = true;
     if (state.selectedGroup !== 'all' && !state.nodes.some((node) => node.group.trim() === state.selectedGroup)) {
@@ -247,6 +335,7 @@ export function startApp(root: HTMLElement): () => void {
     }
     const route = state.route;
     if (route.type === 'detail' && state.nodes.some((node) => node.uuid === route.uuid) && latencyController === null) {
+      void ensurePingTasks();
       loadLatency(route.uuid, state.latencyRange);
       return;
     }
@@ -254,8 +343,18 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const applySnapshot = (snapshot: { online: string[]; data: Record<string, LiveReport> }): void => {
+    const changedUuids = new Set<string>();
+    const nextOnline = new Set(snapshot.online);
+    for (const uuid of new Set([...state.online, ...nextOnline])) {
+      if (state.online.has(uuid) !== nextOnline.has(uuid)) {
+        changedUuids.add(uuid);
+      }
+    }
     state.online = new Set(snapshot.online);
     for (const [uuid, report] of Object.entries(snapshot.data)) {
+      if (liveReportChanged(state.reports.get(uuid), report)) {
+        changedUuids.add(uuid);
+      }
       state.reports.set(uuid, report);
     }
     state.lastUpdate = Date.now();
@@ -266,7 +365,7 @@ export function startApp(root: HTMLElement): () => void {
         updateDetailCore(core, getCurrentNode());
       }
     } else if (state.metadataReady) {
-      render();
+      updateNodeRows(page, getNodeStates(), nodeHandlers, changedUuids);
     }
   };
 

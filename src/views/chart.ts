@@ -1,18 +1,10 @@
 import type { LatencyQuery, LatencySeries } from '../domain';
-import { buildLatencySegments, latencyCeiling } from '../latency';
+import { buildLatencySegments, formatLatencyReadout, formatLatencyTimestamp, latencyCeiling } from '../latency';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
 function svgElement<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTagNameMap[K] {
   return document.createElementNS(SVG_NAMESPACE, tag);
-}
-
-function timeLabel(timestamp: number, rangeHours: number): string {
-  const date = new Date(timestamp);
-  if (rangeHours <= 24) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  }
-  return `${date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 function nearestPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {
@@ -74,13 +66,11 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   graph.setAttribute('viewBox', '0 0 1000 280');
   graph.setAttribute('preserveAspectRatio', 'none');
   graph.setAttribute('role', 'img');
-  graph.setAttribute('aria-label', 'Latency history');
+  graph.setAttribute('aria-label', 'Latency chart');
   graph.setAttribute('tabindex', '0');
-  const title = svgElement('title');
-  title.textContent = 'Latency history';
   const description = svgElement('desc');
   description.textContent = 'Green below 100 milliseconds, yellow from 100 through 200 milliseconds, and red above 200 milliseconds.';
-  graph.append(title, description);
+  graph.append(description);
 
   const grid = svgElement('g');
   grid.classList.add('graph-grid');
@@ -133,7 +123,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   xAxis.className = 'axis-x';
   for (let index = 0; index < 4; index += 1) {
     const label = document.createElement('span');
-    label.textContent = timeLabel(start + timeSpan * index / 3, options.rangeHours);
+    label.textContent = formatLatencyTimestamp(start + timeSpan * index / 3, options.rangeHours);
     xAxis.append(label);
   }
   graphArea.append(xAxis);
@@ -141,9 +131,9 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   container.append(stage);
 
   const readout = document.createElement('div');
-  readout.className = 'readout muted';
-  readout.textContent = 'move cursor for sample';
-  container.append(readout);
+  readout.className = 'chart-readout';
+  readout.hidden = true;
+  graphArea.append(readout);
 
   graph.addEventListener('pointermove', (event) => {
     const bounds = graph.getBoundingClientRect();
@@ -156,7 +146,6 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     crosshair.setAttribute('x1', String(x));
     crosshair.setAttribute('x2', String(x));
     crosshair.style.visibility = 'visible';
-    const values: string[] = [timeLabel(timestamp, options.rangeHours)];
     series.forEach((lineSeries) => {
       const marker = markers.get(lineSeries.taskId);
       const point = nearestPoint(lineSeries, timestamp);
@@ -166,16 +155,17 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       marker.setAttribute('cx', String((point.timestamp - start) / timeSpan * 1000));
       marker.setAttribute('cy', String(280 - point.value / ceiling * 280));
       marker.style.visibility = 'visible';
-      values.push(`${options.labels.get(lineSeries.taskId) ?? lineSeries.label} ${point.value.toFixed(1)}ms`);
     });
-    readout.textContent = values.join(' · ');
+    readout.textContent = formatLatencyReadout(timestamp, series, options.labels, options.rangeHours);
+    readout.style.left = `${ratio * 100}%`;
+    readout.hidden = false;
   });
   graph.addEventListener('pointerleave', () => {
     crosshair.style.visibility = 'hidden';
     markers.forEach((marker) => {
       marker.style.visibility = 'hidden';
     });
-    readout.textContent = 'move cursor for sample';
+    readout.hidden = true;
   });
 }
 

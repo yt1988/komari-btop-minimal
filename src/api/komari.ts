@@ -99,12 +99,14 @@ export function parseNodeMetadata(raw: unknown): NodeMetadata[] {
       uuid,
       name: asString(node.name, uuid),
       group: asString(node.group),
+      region: asString(node.region),
+      weight: asFiniteNumber(node.weight),
       memTotal: asFiniteNumber(node.mem_total),
       diskTotal: asFiniteNumber(node.disk_total),
       trafficLimit: asFiniteNumber(node.traffic_limit),
       trafficLimitType: asString(node.traffic_limit_type, 'max'),
     };
-  });
+  }).sort((left, right) => left.weight - right.weight);
 }
 
 export function parsePingTasks(raw: unknown): PingTask[] {

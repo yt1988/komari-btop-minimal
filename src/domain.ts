@@ -14,6 +14,8 @@ export type NodeMetadata = {
   uuid: string;
   name: string;
   group: string;
+  region: string;
+  weight: number;
   memTotal: number;
   diskTotal: number;
   trafficLimit: number;

@@ -7,6 +7,7 @@ import { ZipArchive } from 'archiver';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distPath = path.join(root, 'dist');
 const manifestPath = path.join(root, 'komari-theme.json');
+const previewPath = path.join(root, 'preview.png');
 const releaseDirectory = path.join(root, 'release');
 const archivePath = path.join(releaseDirectory, 'komari-btop-minimal.zip');
 
@@ -14,8 +15,10 @@ const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 if (manifest.name !== 'Btop Minimal'
   || manifest.short !== 'btop-minimal'
   || manifest.description !== 'A minimal btop-inspired Komari monitor theme.'
-  || manifest.version !== '1.0.0'
-  || manifest.author !== 'Tao') {
+  || manifest.version !== '1.1.0'
+  || manifest.author !== 'Tao'
+  || manifest.url !== "https://github.com/yt1988/komari-btop-minimal"
+  || manifest.preview !== 'preview.png') {
   throw new Error('komari-theme.json does not match the approved theme manifest');
 }
 
@@ -33,6 +36,9 @@ for (const marker of [
 if (!(await stat(distPath)).isDirectory()) {
   throw new Error('dist/ is missing');
 }
+if (!(await stat(previewPath)).isFile()) {
+  throw new Error('preview.png is missing');
+}
 
 await mkdir(releaseDirectory, { recursive: true });
 await new Promise((resolve, reject) => {
@@ -43,6 +49,7 @@ await new Promise((resolve, reject) => {
   archive.on('error', reject);
   archive.pipe(output);
   archive.file(manifestPath, { name: 'komari-theme.json' });
+  archive.file(previewPath, { name: 'preview.png' });
   archive.directory(distPath, 'dist');
   void archive.finalize().catch(reject);
 });
@@ -62,10 +69,10 @@ while (cursor + 46 <= archiveBytes.length && archiveBytes.readUInt32LE(cursor) =
   cursor += 46 + nameLength + extraLength + commentLength;
 }
 
-if (!entries.includes('komari-theme.json') || !entries.includes('dist/index.html')) {
+if (!entries.includes('komari-theme.json') || !entries.includes('preview.png') || !entries.includes('dist/index.html')) {
   throw new Error('Archive is missing required root entries');
 }
-const unexpected = entries.filter((name) => name !== 'komari-theme.json' && !name.startsWith('dist/'));
+const unexpected = entries.filter((name) => name !== 'komari-theme.json' && name !== 'preview.png' && !name.startsWith('dist/'));
 if (unexpected.length > 0) {
   throw new Error(`Archive contains unexpected entries: ${unexpected.join(', ')}`);
 }

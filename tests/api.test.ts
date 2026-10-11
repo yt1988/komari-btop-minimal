@@ -15,6 +15,8 @@ describe('Komari response normalization', () => {
         uuid: 'node-1',
         name: 'edge-a',
         group: 'prod',
+        region: '🇩🇪',
+        weight: 4,
         mem_total: 1024,
         disk_total: 2048,
         traffic_limit: 4096,
@@ -26,11 +28,25 @@ describe('Komari response normalization', () => {
       uuid: 'node-1',
       name: 'edge-a',
       group: 'prod',
+      region: '🇩🇪',
+      weight: 4,
       memTotal: 1024,
       diskTotal: 2048,
       trafficLimit: 4096,
       trafficLimitType: 'sum',
     }]);
+  });
+
+  it('keeps the backend node order defined by weight', () => {
+    expect(parseNodeMetadata({
+      status: 'success',
+      data: [
+        { uuid: 'late', name: 'late', weight: 9 },
+        { uuid: 'first', name: 'first', weight: 1 },
+        { uuid: 'middle', name: 'middle', weight: 4 },
+        { uuid: 'tie', name: 'tie', weight: 4 },
+      ],
+    }).map((node) => node.uuid)).toEqual(['first', 'middle', 'tie', 'late']);
   });
 
   it('normalizes task ids and live report data', () => {

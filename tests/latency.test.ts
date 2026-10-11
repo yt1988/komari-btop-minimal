@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LATENCY_RANGES,
   buildLatencySegments,
+  formatLatencyReadout,
   latencyCeiling,
   toggleVisibleTasks,
 } from '../src/latency';
@@ -47,6 +48,19 @@ describe('latency selection and segmentation', () => {
     expect(segments).toHaveLength(1);
     expect(segments[0]?.from.timestamp).toBe(0);
     expect(segments[0]?.to.timestamp).toBe(100);
+  });
+
+  it('formats the hovered timestamp and visible probe values', () => {
+    const labels = new Map([['unicom', 'unicom'], ['mobile', 'mobile']]);
+    expect(formatLatencyReadout(
+      Date.parse('2026-10-11T01:02:03Z'),
+      [
+        { taskId: 'unicom', label: 'unicom', points: [{ timestamp: Date.parse('2026-10-11T01:02:00Z'), value: 42 }] },
+        { taskId: 'mobile', label: 'mobile', points: [{ timestamp: Date.parse('2026-10-11T01:02:00Z'), value: 210 }] },
+      ],
+      labels,
+      24,
+    )).toContain('unicom 42.0ms');
   });
 });
 

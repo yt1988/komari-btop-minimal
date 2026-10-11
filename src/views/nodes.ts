@@ -1,4 +1,5 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
+import { normalizeRegionFlag } from '../region';
 import { getTrafficPresentation } from '../traffic';
 import type { NodeState } from '../domain';
 
@@ -30,7 +31,7 @@ function resourceCell(value: number | null, online: boolean): HTMLDivElement {
   const percent = Math.max(0, Math.min(100, value));
   const tone = metricTone(percent);
   const bar = element('span', `resource-bar ${tone === 'warning' ? 'warn' : 'ok'}`);
-  bar.textContent = progressBar(percent, 10);
+  bar.textContent = progressBar(percent, 100, 10);
   const text = element('span', `percent ${tone === 'warning' ? 'warn' : 'ok'}`);
   text.textContent = formatPercent(percent);
   cell.append(bar, text);
@@ -103,20 +104,27 @@ function trafficCell(node: NodeState): HTMLDivElement {
   return cell;
 }
 
-function nodeRow(node: NodeState, handlers: NodeListHandlers): HTMLDivElement {
-  const row = element('div', 'row');
+function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeListHandlers): void {
   const nodeCell = element('div', 'node');
   const status = element('span', `node-status ${node.online ? 'online' : 'offline'}`);
   status.textContent = '●';
   status.setAttribute('aria-label', node.online ? 'online' : 'offline');
+  const flag = normalizeRegionFlag(node.metadata.region);
+  if (flag) {
+    const region = element('span', 'node-flag');
+    region.textContent = flag;
+    nodeCell.append(status, region);
+  } else {
+    nodeCell.append(status);
+  }
   const name = element('button', 'node-name');
   name.type = 'button';
   name.textContent = node.metadata.name;
   name.addEventListener('click', () => handlers.onNodeSelect(node.metadata.uuid));
-  nodeCell.append(status, name);
+  nodeCell.append(name);
 
   const report = node.report;
-  row.append(
+  row.replaceChildren(
     nodeCell,
     resourceCell(report?.cpuUsage ?? null, node.online),
     resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online),
@@ -124,7 +132,32 @@ function nodeRow(node: NodeState, handlers: NodeListHandlers): HTMLDivElement {
     networkCell(node),
     trafficCell(node),
   );
+}
+
+function nodeRow(node: NodeState, handlers: NodeListHandlers): HTMLDivElement {
+  const row = element('div', 'row');
+  row.dataset.nodeUuid = node.metadata.uuid;
+  populateNodeRow(row, node, handlers);
   return row;
+}
+
+export function updateNodeRows(
+  container: HTMLElement,
+  nodes: NodeState[],
+  handlers: NodeListHandlers,
+  changedUuids?: ReadonlySet<string>,
+): void {
+  const nodesByUuid = new Map(nodes.map((node) => [node.metadata.uuid, node]));
+  container.querySelectorAll<HTMLDivElement>('.nodes .row[data-node-uuid]').forEach((row) => {
+    const uuid = row.dataset.nodeUuid;
+    if (!uuid || (changedUuids && !changedUuids.has(uuid))) {
+      return;
+    }
+    const node = nodesByUuid.get(uuid);
+    if (node) {
+      populateNodeRow(row, node, handlers);
+    }
+  });
 }
 
 export function renderNodeList(
