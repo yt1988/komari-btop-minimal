@@ -5,7 +5,12 @@ const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8
 const trafficView = readFileSync(new URL('../src/views/traffic.ts', import.meta.url), 'utf8');
 const detailView = readFileSync(new URL('../src/views/detail.ts', import.meta.url), 'utf8');
 const mobileStyles = styles.slice(styles.indexOf('@media (max-width: 1240px)'));
+const mediumStyles = styles.slice(
+  styles.indexOf('@media (max-width: 1240px)'),
+  styles.indexOf('@media (max-width: 700px)'),
+);
 const compactStyles = styles.slice(styles.indexOf('@media (max-width: 700px)'));
+const narrowStyles = styles.slice(styles.indexOf('@media (max-width: 420px)'));
 
 describe('narrow viewport layout', () => {
   it('reflows node rows and detail metrics instead of retaining the desktop table width', () => {
@@ -25,6 +30,11 @@ describe('narrow viewport layout', () => {
   it('keeps resource values next to their bars at narrow widths', () => {
     expect(mobileStyles).toMatch(/\.resource\s*\{[\s\S]*?grid-template-columns:\s*max-content\s+max-content;/);
     expect(mobileStyles).not.toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/);
+  });
+
+  it('keeps CPU, memory, and disk bars legible in medium and small layouts', () => {
+    expect(mediumStyles).toMatch(/\.resource-bar\s*\{[^}]*font-size:\s*12px;[^}]*letter-spacing:\s*-0\.02em;/);
+    expect(narrowStyles).toMatch(/\.resource-bar\s*\{[^}]*font-size:\s*12px;[^}]*letter-spacing:\s*-0\.02em;/);
   });
 
   it('reserves a stable traffic limit row and shares duplex columns with detail metrics', () => {

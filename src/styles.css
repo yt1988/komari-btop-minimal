@@ -679,8 +679,8 @@ footer {
   .resource-bar {
     min-width: 0;
     overflow: hidden;
-    font-size: 11px;
-    letter-spacing: -0.16em;
+    font-size: 12px;
+    letter-spacing: -0.02em;
     text-overflow: clip;
   }
 
@@ -829,7 +829,7 @@ footer {
 
   .resource-bar {
     font-size: 12px;
-    letter-spacing: -0.12em;
+    letter-spacing: -0.02em;
   }
 
   .metric-row {
