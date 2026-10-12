@@ -159,7 +159,14 @@ button {
   padding: 9px 0;
   border-bottom: 1px solid #0d3a20;
   color: #35f477;
-  align-items: start;
+}
+
+.row > .node,
+.row > .resource,
+.row > .network,
+.row > .traffic {
+  align-self: center;
+  min-height: 35px;
 }
 
 .node {
@@ -345,7 +352,6 @@ button {
 
 .table-end {
   height: 14px;
-  border-bottom: 1px solid #159849;
 }
 
 .empty-state,

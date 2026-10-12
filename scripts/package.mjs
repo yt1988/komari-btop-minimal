@@ -15,7 +15,7 @@ const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 if (manifest.name !== 'Btop Minimal'
   || manifest.short !== 'btop-minimal'
   || manifest.description !== 'A minimal btop-inspired Komari monitor theme.'
-  || manifest.version !== '1.4.1'
+  || manifest.version !== '1.4.2'
   || manifest.author !== 'Tao'
   || manifest.url !== "https://github.com/yt1988/komari-btop-minimal"
   || manifest.preview !== 'preview.png') {

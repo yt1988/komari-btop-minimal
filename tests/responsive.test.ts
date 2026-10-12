@@ -35,7 +35,9 @@ describe('narrow viewport layout', () => {
     expect(styles).toMatch(/\.limit-track\s*\{[\s\S]*?width:\s*100%;/);
     expect(styles).toMatch(/\.traffic-limit \.limit-text\s*\{[\s\S]*?overflow:\s*visible;[\s\S]*?white-space:\s*nowrap;/);
     expect(styles).toMatch(/\.metric-network\s*,\s*\.metric-traffic\s+\.traffic-current\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
-    expect(styles).toMatch(/\.row\s*\{[\s\S]*?align-items:\s*start;/);
+    expect(styles.match(/\.row\s*\{([^}]*)\}/)?.[1]).toMatch(/align-items:\s*center;/);
+    expect(styles).toMatch(/\.row\s*>\s*\.node,\s*\.row\s*>\s*\.resource,\s*\.row\s*>\s*\.network,\s*\.row\s*>\s*\.traffic\s*\{[\s\S]*?align-self:\s*center;[\s\S]*?min-height:\s*35px;/);
+    expect(styles.match(/\.table-end\s*\{([^}]*)\}/)?.[1]).not.toMatch(/border-bottom:/);
     expect(mobileStyles).toMatch(/'network network network traffic traffic traffic'/);
     expect(compactStyles).toMatch(/'network network network'\s*'traffic traffic traffic'/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?grid-template-rows:\s*13px\s+18px\s+15px;/);
