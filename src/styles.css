@@ -1,6 +1,7 @@
 :root {
   --duplex-column: 12.5ch;
   --duplex-gap: 8px;
+  --traffic-progress-width: 12ch;
   color-scheme: dark;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 14px;
@@ -158,6 +159,7 @@ button {
   padding: 9px 0;
   border-bottom: 1px solid #0d3a20;
   color: #35f477;
+  align-items: start;
 }
 
 .node {
@@ -284,9 +286,9 @@ button {
 
 .traffic-limit {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: var(--traffic-progress-width) max-content;
   align-items: center;
-  width: calc(var(--duplex-column) * 2 + var(--duplex-gap));
+  width: 100%;
   max-width: 100%;
   gap: 6px;
   color: #35f477;
@@ -295,9 +297,10 @@ button {
 }
 
 .traffic-limit .limit-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .traffic-limit.is-empty {

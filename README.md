@@ -10,7 +10,7 @@
 - 按 Komari 后台 `weight` 保持节点排序，并支持分组筛选。
 - 有流量限额的节点显示简洁进度条；使用量超过 80% 以黄色提示。
 - 节点详情页合并实时指标与延迟图表，支持 `1h`、`6h`、`24h`、`3d`、`7d`、`30d`。
-- 延迟图表按 `<100ms`、`100–200ms`、`>200ms` 分别使用绿、黄、红色，并支持多目标叠加筛选。
+- 延迟图表为每个监测目标保留稳定的专属颜色，并支持多目标叠加筛选。
 - 仅使用主题自身资源，无外部图标或运行时依赖。
 
 ## 安装
@@ -43,7 +43,7 @@ A minimal Komari theme for personal monitoring, inspired by the classic command-
 - Preserves the Komari backend node order from `weight` and supports group filtering.
 - Shows a compact quota progress bar for limited nodes and highlights usage above 80% in yellow.
 - Combines live node metrics and latency history on one detail page, with six selectable time ranges.
-- Colors latency segments green below 100 ms, yellow from 100 to 200 ms, and red above 200 ms.
+- Gives each latency probe a stable dedicated color and supports layered multi-probe filtering.
 - Uses only theme-local resources; there are no external icons or runtime dependencies.
 
 ## Installation
