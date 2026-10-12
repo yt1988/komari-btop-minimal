@@ -55,6 +55,8 @@ describe('narrow viewport layout', () => {
     expect(narrowStyles).toMatch(/\.chart-readout\s*\{[\s\S]*?position:\s*static;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?grid-template-rows:\s*13px\s+18px\s+15px;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?row-gap:\s*3px;/);
+    expect(styles).toMatch(/\.filter\[aria-pressed='true'\]::after\s*\{[\s\S]*?height:\s*2px;[\s\S]*?background:\s*#35f477;/);
+    expect(styles).toMatch(/\.theme-link:focus-visible/);
     expect(trafficView).toContain('formatTraffic');
     expect(trafficView).toContain('traffic-current');
     expect(trafficView).toContain('traffic-limit');

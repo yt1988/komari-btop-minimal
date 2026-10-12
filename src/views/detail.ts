@@ -1,6 +1,6 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
-import { LATENCY_RANGES, latencySeriesColor, latencySeriesDash } from '../latency';
+import { LATENCY_RANGES, latencySeriesColor } from '../latency';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
 import { renderTrafficCell } from './traffic';
@@ -180,8 +180,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     const button = element('button', `probe${options.visibleTaskIds.includes(taskId) ? ' active' : ''}`);
     button.type = 'button';
     const dot = element('span', 'probe-swatch');
-    dot.style.color = latencySeriesColor(taskId, taskIds);
-    dot.style.borderTopStyle = latencySeriesDash(taskId, taskIds) === 'none' ? 'solid' : 'dashed';
+    dot.style.backgroundColor = latencySeriesColor(taskId, taskIds);
     dot.setAttribute('aria-hidden', 'true');
     button.append(dot);
     const label = element('span');

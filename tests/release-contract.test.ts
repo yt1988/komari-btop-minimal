@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 const manifest = JSON.parse(readFileSync(new URL('../komari-theme.json', import.meta.url), 'utf8')) as Record<string, unknown>;
+const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
 describe('release contract', () => {
   it('keeps package metadata and the Komari manifest aligned', () => {
@@ -11,6 +12,13 @@ describe('release contract', () => {
       expect(manifest[field]).toEqual(expect.any(String));
       expect((manifest[field] as string).trim()).not.toBe('');
     }
+  });
+
+  it('links safely to the canonical theme repository from the footer', () => {
+    expect(indexHtml).toContain(`href="${manifest.url}"`);
+    expect(indexHtml).toContain('target="_blank"');
+    expect(indexHtml).toContain('rel="noopener noreferrer"');
+    expect(indexHtml).toContain('opens in a new tab');
   });
 
   it('declares reproducible validation and project metadata', () => {

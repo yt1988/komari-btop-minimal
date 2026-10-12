@@ -1,11 +1,10 @@
 import type { LatencyQuery, LatencySeries } from '../domain';
 import {
-  buildLatencySegments,
+  buildLatencyRuns,
   formatLatencyTimestamp,
   latencyCeiling,
   latencyReadoutEntries,
   latencySeriesColor,
-  latencySeriesDash,
 } from '../latency';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -76,7 +75,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   graph.setAttribute('role', 'img');
   graph.setAttribute('aria-label', 'Latency chart');
   const description = svgElement('desc');
-  description.textContent = 'Each latency target uses a distinct color and line pattern.';
+  description.textContent = 'Each latency target uses a stable dedicated color.';
   graph.append(description);
 
   const grid = svgElement('g');
@@ -109,19 +108,20 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     const sampleInterval = options.query?.intervalSeconds && options.query.intervalSeconds > 0
       ? options.query.intervalSeconds * 1000
       : Math.max(1, options.rangeHours * 60 / 480) * 60_000;
-    for (const segment of buildLatencySegments(lineSeries.points, sampleInterval)) {
-      const line = svgElement('line');
-      line.classList.add('latency-segment');
-      line.style.stroke = color;
-      const dash = latencySeriesDash(lineSeries.taskId, options.allTaskIds);
-      if (dash !== 'none') {
-        line.setAttribute('stroke-dasharray', dash);
+    for (const run of buildLatencyRuns(lineSeries.points, sampleInterval)) {
+      const first = run[0];
+      if (!first) {
+        continue;
       }
-      line.setAttribute('x1', String((segment.from.timestamp - start) / timeSpan * 1000));
-      line.setAttribute('x2', String((segment.to.timestamp - start) / timeSpan * 1000));
-      line.setAttribute('y1', String(280 - segment.from.value! / ceiling * 280));
-      line.setAttribute('y2', String(280 - segment.to.value! / ceiling * 280));
-      group.append(line);
+      const path = svgElement('path');
+      path.classList.add('latency-segment');
+      path.style.stroke = color;
+      const commands = [`M ${((first.timestamp - start) / timeSpan * 1000).toFixed(3)} ${(280 - first.value / ceiling * 280).toFixed(3)}`];
+      for (const point of run.slice(1)) {
+        commands.push(`L ${((point.timestamp - start) / timeSpan * 1000).toFixed(3)} ${(280 - point.value / ceiling * 280).toFixed(3)}`);
+      }
+      path.setAttribute('d', commands.join(' '));
+      group.append(path);
     }
     const marker = svgElement('circle');
     marker.classList.add('point');
@@ -188,8 +188,11 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       const separator = document.createTextNode(' · ');
       const value = document.createElement('span');
       value.className = 'chart-readout-item';
-      value.style.color = latencySeriesColor(entry.taskId, options.allTaskIds);
-      value.textContent = `${entry.label} ${entry.value.toFixed(1)}ms`;
+      const swatch = document.createElement('span');
+      swatch.className = 'chart-readout-swatch';
+      swatch.style.backgroundColor = latencySeriesColor(entry.taskId, options.allTaskIds);
+      swatch.setAttribute('aria-hidden', 'true');
+      value.append(swatch, document.createTextNode(`${entry.label} ${entry.value.toFixed(1)}ms`));
       readout.append(separator, value);
     });
     readout.style.left = `${ratio * 100}%`;

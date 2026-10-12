@@ -9,13 +9,12 @@ export const LATENCY_RANGES = [
   { label: '30d', hours: 720 },
 ] as const;
 
+// Fixed categorical slots validated against the #030805 terminal surface. Status
+// colors remain reserved for node health and are deliberately not used here.
 export const LATENCY_SERIES_COLORS = [
-  '#20b8ff',
-  '#a8e600',
-  '#ffb347',
-  '#ff6b8a',
-  '#b58cff',
-  '#35f477',
+  '#3987e5',
+  '#7046c7',
+  '#a35229',
 ] as const;
 
 export type LatencySegment = {
@@ -29,13 +28,7 @@ export type LatencyReadoutEntry = {
   value: number;
 };
 
-const LATENCY_SERIES_DASHES = ['none', '8 4', '3 3', '10 3 2 3', '2 4', '12 4'] as const;
-
-function seriesIndex(taskId: string, allTaskIds: readonly string[]): number {
-  const index = allTaskIds.indexOf(taskId);
-  if (index >= 0) {
-    return index;
-  }
+function seriesIndex(taskId: string): number {
   let hash = 0;
   for (const character of taskId) {
     hash = (hash * 31 + character.charCodeAt(0)) | 0;
@@ -43,12 +36,12 @@ function seriesIndex(taskId: string, allTaskIds: readonly string[]): number {
   return Math.abs(hash);
 }
 
-export function latencySeriesColor(taskId: string, allTaskIds: readonly string[]): string {
-  return LATENCY_SERIES_COLORS[seriesIndex(taskId, allTaskIds) % LATENCY_SERIES_COLORS.length]!;
-}
-
-export function latencySeriesDash(taskId: string, allTaskIds: readonly string[]): string {
-  return LATENCY_SERIES_DASHES[seriesIndex(taskId, allTaskIds) % LATENCY_SERIES_DASHES.length]!;
+/**
+ * A monitoring target keeps its color even if another range changes the order
+ * or membership of the returned series.
+ */
+export function latencySeriesColor(taskId: string, _allTaskIds: readonly string[] = []): string {
+  return LATENCY_SERIES_COLORS[seriesIndex(taskId) % LATENCY_SERIES_COLORS.length]!;
 }
 
 function nearestLatencyPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {
@@ -153,21 +146,54 @@ function validPoint(point: LatencyPoint): point is LatencyPoint & { value: numbe
 }
 
 export function buildLatencySegments(points: LatencyPoint[], sampleIntervalMs: number): LatencySegment[] {
+  return buildLatencyRuns(points, sampleIntervalMs).flatMap((run) => {
+    const segments: LatencySegment[] = [];
+    for (let index = 1; index < run.length; index += 1) {
+      const from = run[index - 1];
+      const to = run[index];
+      if (from && to) {
+        segments.push({ from, to });
+      }
+    }
+    return segments;
+  });
+}
+
+/**
+ * Returns point runs that may safely be drawn as a single SVG path. Missing,
+ * invalid, duplicate, and over-large time gaps deliberately start a new run.
+ */
+export function buildLatencyRuns(
+  points: LatencyPoint[],
+  sampleIntervalMs: number,
+): Array<Array<LatencyPoint & { value: number }>> {
   const sorted = [...points].sort((left, right) => left.timestamp - right.timestamp);
-  const segments: LatencySegment[] = [];
-  let previous: (LatencyPoint & { value: number }) | null = null;
-  const maxGap = Number.isFinite(sampleIntervalMs) && sampleIntervalMs > 0 ? sampleIntervalMs * 1.5 : Number.POSITIVE_INFINITY;
+  const runs: Array<Array<LatencyPoint & { value: number }>> = [];
+  let run: Array<LatencyPoint & { value: number }> = [];
+  const maxGap = Number.isFinite(sampleIntervalMs) && sampleIntervalMs > 0
+    ? sampleIntervalMs * 1.5
+    : Number.POSITIVE_INFINITY;
+
   for (const point of sorted) {
     if (!validPoint(point)) {
-      previous = null;
+      if (run.length > 1) {
+        runs.push(run);
+      }
+      run = [];
       continue;
     }
-    const lastPoint = previous;
-    if (lastPoint !== null && point.timestamp > lastPoint.timestamp && point.timestamp - lastPoint.timestamp <= maxGap) {
-      segments.push({ from: lastPoint, to: point });
+    const previous = run.at(-1);
+    if (previous && (point.timestamp <= previous.timestamp || point.timestamp - previous.timestamp > maxGap)) {
+      if (run.length > 1) {
+        runs.push(run);
+      }
+      run = [];
     }
-    previous = point;
+    run.push(point);
   }
-  return segments;
+  if (run.length > 1) {
+    runs.push(run);
+  }
+  return runs;
 }
 

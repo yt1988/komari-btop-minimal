@@ -98,6 +98,20 @@ button {
   color: #178e48;
 }
 
+.filter {
+  position: relative;
+}
+
+.filter[aria-pressed='true']::after {
+  position: absolute;
+  right: 0;
+  bottom: -4px;
+  left: 0;
+  height: 2px;
+  background: #35f477;
+  content: '';
+}
+
 .filter + .filter::before {
   margin: 0 11px;
   color: #159849;
@@ -116,7 +130,8 @@ button {
 .probe:focus-visible,
 .back:focus-visible,
 .retry:focus-visible,
-.node-name:focus-visible {
+.node-name:focus-visible,
+.theme-link:focus-visible {
   outline: 1px solid #35f477;
   outline-offset: 3px;
 }
@@ -463,7 +478,7 @@ button {
 .probe-swatch {
   display: inline-block;
   width: 16px;
-  border-top: 2px solid currentColor;
+  height: 2px;
   flex: 0 0 auto;
 }
 
@@ -527,6 +542,8 @@ button {
 
 .latency-segment {
   fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
 }
@@ -570,6 +587,18 @@ button {
   white-space: nowrap;
 }
 
+.chart-readout-item {
+  color: #35f477;
+}
+
+.chart-readout-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
 .powered {
   padding: 0 34px 12px;
   color: #0d3a20;
@@ -577,10 +606,22 @@ button {
   text-align: center;
 }
 
-footer {
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 0.6ch;
+  padding: 0 14px 12px;
   color: #178e48;
   font-size: 11px;
   text-align: center;
+}
+
+.theme-link {
+  color: #35f477;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 @media (max-width: 1200px) {
