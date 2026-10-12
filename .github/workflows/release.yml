@@ -22,7 +22,37 @@ jobs:
       - name: Verify tag version
         shell: bash
         run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+      - name: Write bilingual release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## 中文
+
+          ### 更新内容
+          - 强化实时遥测：防止旧快照覆盖新数据，并在节点报告消失时清理过期指标。
+          - 改进 WebSocket 重连、请求背压、延迟图自动刷新与失败重试。
+          - 修复部分 API 数据被错误显示为 `0` 的问题，未知数据现在会明确显示为不可用。
+          - 改善移动端流量额度排版、图表线型区分、状态播报和颜色对比度。
+          - 新增开发与发布质量门禁：锁定工具链、自动生成本地国旗资源、CI 检查与发布包校验。
+
+          ### 验证
+          - `npm run check`
+          - `npm run package`
+
+          ## English
+
+          ### Highlights
+          - Hardened live telemetry so stale snapshots cannot replace newer data and disappeared node reports are cleared.
+          - Improved WebSocket reconnection, request backpressure, latency refresh, and retry behavior.
+          - Fixed partial API payloads being rendered as misleading zero values; unavailable data is now explicit.
+          - Improved narrow-screen traffic layout, chart line distinction, status announcements, and text contrast.
+          - Added release-quality safeguards: pinned toolchain intent, automatic local flag preparation, CI validation, and package checks.
+
+          ### Verification
+          - `npm run check`
+          - `npm run package`
+          EOF
       - uses: softprops/action-gh-release@v2
         with:
           files: release/komari-btop-minimal.zip
-          generate_release_notes: true
+          body_path: release-notes.md
