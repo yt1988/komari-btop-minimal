@@ -354,6 +354,13 @@ button {
   height: 14px;
 }
 
+@media (min-width: 1241px) {
+  .row > .network,
+  .row > .traffic {
+    padding-top: 16px;
+  }
+}
+
 .empty-state,
 .chart-message {
   padding: 12px 0;
