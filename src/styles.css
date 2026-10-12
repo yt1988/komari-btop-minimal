@@ -233,7 +233,9 @@ button {
 .network {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, var(--duplex-column)));
-  gap: var(--duplex-gap);
+  grid-template-rows: 18px 15px;
+  column-gap: var(--duplex-gap);
+  row-gap: 2px;
   justify-content: start;
   min-width: 0;
   white-space: nowrap;
@@ -270,8 +272,6 @@ button {
 
 .traffic-current,
 .traffic-limit {
-  display: flex;
-  align-items: center;
   min-width: 0;
 }
 
@@ -282,15 +282,10 @@ button {
   justify-content: start;
 }
 
-.traffic.has-no-limit {
-  grid-template-rows: 1fr;
-}
-
-.traffic.has-no-limit .traffic-current {
-  align-self: center;
-}
-
 .traffic-limit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   width: calc(var(--duplex-column) * 2 + var(--duplex-gap));
   max-width: 100%;
   gap: 6px;
@@ -406,14 +401,9 @@ button {
 .metric-network {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--duplex-gap);
-}
-
-.metric-direction {
-  display: grid;
-  grid-template-columns: 1ch minmax(0, 1fr);
-  gap: 5px;
-  min-width: 0;
+  grid-template-rows: 18px 15px;
+  column-gap: var(--duplex-gap);
+  row-gap: 2px;
 }
 
 .latency {
@@ -645,8 +635,9 @@ footer {
 
   .resource {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: max-content max-content;
     align-items: center;
+    justify-content: start;
     gap: 2px 4px;
   }
 
@@ -683,7 +674,9 @@ footer {
   .network {
     grid-area: network;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--duplex-gap);
+    grid-template-rows: 13px 18px 15px;
+    column-gap: var(--duplex-gap);
+    row-gap: 3px;
   }
 
   .traffic {
@@ -691,10 +684,6 @@ footer {
     grid-template-rows: 13px 18px 15px;
     gap: 3px;
     min-height: 49px;
-  }
-
-  .traffic.has-no-limit {
-    grid-template-rows: 13px 18px 15px;
   }
 
   .traffic-current {
@@ -726,10 +715,10 @@ footer {
   .metric-row {
     width: 100%;
     min-width: 0;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     grid-template-areas:
-      'cpu mem disk'
-      'network network traffic';
+      'cpu cpu mem mem disk disk'
+      'network network network traffic traffic traffic';
     gap: 12px 18px;
     padding-bottom: 16px;
   }
@@ -751,10 +740,17 @@ footer {
     grid-area: disk;
   }
 
-  .metric-network {
-    grid-area: network;
+  .metric-network,
+  .metric-traffic .traffic-current {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--duplex-gap);
+  }
+
+  .metric-network {
+    grid-area: network;
+    grid-template-rows: 13px 18px 15px;
+    column-gap: var(--duplex-gap);
+    row-gap: 3px;
   }
 
   .metric-network::before {
@@ -795,12 +791,11 @@ footer {
   }
 
   .metric-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-template-areas:
-      'cpu mem'
-      'disk disk'
-      'network network'
-      'traffic traffic';
+      'cpu mem disk'
+      'network network network'
+      'traffic traffic traffic';
   }
 }
 

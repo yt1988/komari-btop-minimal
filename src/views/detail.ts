@@ -3,6 +3,7 @@ import type { LatencyQuery, NodeState, PingTask } from '../domain';
 import { LATENCY_RANGES } from '../latency';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
+import { renderTrafficCell } from './traffic';
 
 export type DetailHandlers = {
   onBack: () => void;
@@ -57,50 +58,32 @@ function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
     return;
   }
   const report = node.report;
-  const values: string[] = [
-    report?.cpuUsage === null || report?.cpuUsage === undefined ? '--' : formatPercent(report.cpuUsage),
-    report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--',
-    report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--',
-    '',
-    report?.network ? `↓ ${formatBytes(report.network.totalDown)}  ↑ ${formatBytes(report.network.totalUp)}` : '--',
-  ];
-  const tones = [
-    report?.cpuUsage === null || report?.cpuUsage === undefined ? 'muted' : metricTone(report.cpuUsage) === 'warning' ? 'warn' : 'ok',
-    report?.ram ? 'ok' : 'muted',
-    report?.disk ? 'ok' : 'muted',
-    report?.network ? 'ok' : 'muted',
-    report?.network ? 'ok' : 'muted',
-  ];
-  if (!node.online) {
-    tones.fill('danger');
+  const cpu = element('div', `metric metric-cpu ${!node.online ? 'danger' : report?.cpuUsage === null || report?.cpuUsage === undefined ? 'muted' : metricTone(report.cpuUsage) === 'warning' ? 'warn' : 'ok'}`);
+  cpu.dataset.mobileLabel = 'CPU';
+  cpu.textContent = report?.cpuUsage === null || report?.cpuUsage === undefined ? '--' : formatPercent(report.cpuUsage);
+
+  const memory = element('div', `metric metric-mem ${!node.online ? 'danger' : report?.ram ? 'ok' : 'muted'}`);
+  memory.dataset.mobileLabel = 'MEM';
+  memory.textContent = report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--';
+
+  const disk = element('div', `metric metric-disk ${!node.online ? 'danger' : report?.disk ? 'ok' : 'muted'}`);
+  disk.dataset.mobileLabel = 'DISK';
+  disk.textContent = report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--';
+
+  const network = element('div', `metric metric-network ${!node.online ? 'danger' : report?.network ? 'ok' : 'muted'}`);
+  network.dataset.mobileLabel = 'NETWORK';
+  for (const [direction, value] of [['down', report?.network?.down], ['up', report?.network?.up]] as const) {
+    const tone = !node.online ? 'danger' : typeof value !== 'number' ? 'muted' : networkTone(value) === 'warning' ? 'warn' : 'ok';
+    const item = element('span', `direction ${tone}`);
+    const arrow = element('span', 'direction-arrow');
+    arrow.textContent = direction === 'down' ? '↓' : '↑';
+    const text = element('span', 'direction-value');
+    text.textContent = typeof value === 'number' ? formatSpeed(value) : '--';
+    item.append(arrow, text);
+    network.append(item);
   }
-  const labels = ['CPU', 'MEM', 'DISK', 'NETWORK', 'TRAFFIC'] as const;
-  values.forEach((value, index) => {
-    const label = labels[index] ?? 'METRIC';
-    const metric = element('div', `metric metric-${label.toLowerCase()} ${tones[index] ?? 'muted'}`);
-    metric.dataset.mobileLabel = label;
-    if (index === 3 && report?.network) {
-      metric.className = `metric metric-network ${tones[index] ?? 'muted'}`;
-      for (const [direction, value] of [['down', report.network.down], ['up', report.network.up]] as const) {
-        const tone = !node.online ? 'danger' : networkTone(value) === 'warning' ? 'warn' : 'ok';
-        const item = element('span', `metric-direction ${tone}`);
-        const arrow = element('span', 'direction-arrow');
-        arrow.textContent = direction === 'down' ? '↓' : '↑';
-        const text = element('span', 'direction-value');
-        text.textContent = formatSpeed(value);
-        item.append(arrow, text);
-        metric.append(item);
-      }
-      if (!node.online) {
-        metric.classList.add('danger');
-      }
-    } else if (index === 3) {
-      metric.textContent = '--';
-    } else {
-      metric.textContent = value;
-    }
-    row.append(metric);
-  });
+
+  row.append(cpu, memory, disk, network, renderTrafficCell(node, 'metric metric-traffic traffic'));
   container.replaceChildren(row);
 }
 

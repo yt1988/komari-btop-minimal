@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatBytes,
   formatPercent,
+  formatTraffic,
   formatSpeed,
   metricTone,
   networkTone,
@@ -16,8 +17,16 @@ describe('terminal formatting', () => {
     expect(formatSpeed(1024)).toBe('1.0 KB/s');
     expect(formatSpeed(1024 ** 2)).toBe('1.0 MB/s');
     expect(formatSpeed(1024 ** 3)).toBe('1.0 GB/s');
+    expect(formatSpeed(512)).toBe('0.5 KB/s');
     expect(formatBytes(null)).toBe('--');
     expect(formatSpeed(Number.NaN)).toBe('--');
+  });
+
+  it('formats traffic totals with compact KB, MB, GB, and TB labels', () => {
+    expect(formatTraffic(1024)).toBe('1.0 KB');
+    expect(formatTraffic(1024 ** 2)).toBe('1.0 MB');
+    expect(formatTraffic(1024 ** 3)).toBe('1.0 GB');
+    expect(formatTraffic(1024 ** 4)).toBe('1.0 TB');
   });
 
   it('keeps percentages and bars bounded', () => {

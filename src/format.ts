@@ -1,7 +1,8 @@
 export type MetricTone = 'normal' | 'warning';
 
 const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const;
-const SPEED_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const;
+const SPEED_UNITS = ['KB', 'MB', 'GB', 'TB', 'PB'] as const;
+const TRAFFIC_UNITS = ['KB', 'MB', 'GB', 'TB'] as const;
 const MIB = 1024 ** 2;
 
 function finiteNonNegative(value: number | null | undefined): number | null {
@@ -37,7 +38,37 @@ export function formatBytes(value: number | null | undefined): string {
 }
 
 export function formatSpeed(value: number | null | undefined): string {
-  return formatScaled(value, SPEED_UNITS, '/s');
+  const safeValue = finiteNonNegative(value);
+  if (safeValue === null) {
+    return '--';
+  }
+
+  let scaled = safeValue / 1024;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < SPEED_UNITS.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+
+  const unit = SPEED_UNITS[unitIndex] ?? SPEED_UNITS[0];
+  return `${scaled === 0 ? '0' : scaled.toFixed(1)} ${unit}/s`;
+}
+
+export function formatTraffic(value: number | null | undefined): string {
+  const safeValue = finiteNonNegative(value);
+  if (safeValue === null) {
+    return '--';
+  }
+
+  let scaled = safeValue / 1024;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < TRAFFIC_UNITS.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+
+  const unit = TRAFFIC_UNITS[unitIndex] ?? TRAFFIC_UNITS[0];
+  return `${scaled === 0 ? '0' : scaled.toFixed(1)} ${unit}`;
 }
 
 export function formatPercent(value: number | null | undefined): string {

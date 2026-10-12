@@ -1,7 +1,7 @@
-import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
+import { formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
-import { getTrafficPresentation } from '../traffic';
 import type { NodeState } from '../domain';
+import { renderTrafficCell } from './traffic';
 
 export type NodeListHandlers = {
   onGroupSelect: (group: string) => void;
@@ -88,52 +88,6 @@ function networkCell(node: NodeState): HTMLDivElement {
   return cell;
 }
 
-function trafficCell(node: NodeState): HTMLDivElement {
-  const cell = element('div', 'traffic');
-  cell.dataset.mobileLabel = 'TRAFFIC';
-  const network = node.report?.network;
-  const hasTotals = network !== null && network !== undefined;
-  const current = element('div', 'traffic-current');
-  for (const [direction, value] of [['down', network?.totalDown], ['up', network?.totalUp]] as const) {
-    const total = element('span', `direction ${direction} ${!node.online && hasTotals ? 'danger' : hasTotals ? 'ok' : node.online ? 'muted' : 'danger'}`);
-    const arrow = element('span', 'direction-arrow');
-    arrow.textContent = direction === 'down' ? '↓' : '↑';
-    const text = element('span', 'direction-value');
-    text.textContent = hasTotals && typeof value === 'number' ? formatBytes(value) : '--';
-    total.append(arrow, text);
-    current.append(total);
-  }
-  cell.append(current);
-
-  const presentation = getTrafficPresentation(
-    { up: network?.totalUp ?? null, down: network?.totalDown ?? null },
-    node.metadata.trafficLimit,
-    node.metadata.trafficLimitType,
-  );
-  if (!presentation.limited) {
-    cell.classList.add('has-no-limit');
-    return cell;
-  }
-
-  const limitRow = element('div', `traffic-limit${presentation.tone === 'warning' ? ' warn' : ''}`);
-  if (!hasTotals) {
-    limitRow.classList.add('is-empty');
-  } else if (!node.online) {
-    limitRow.classList.add('danger');
-  }
-  const track = element('span', 'limit-track');
-  const fill = element('span', 'limit-fill');
-  fill.style.width = `${presentation.ratio * 100}%`;
-  track.append(fill);
-  const text = element('span', 'limit-text');
-  text.textContent = hasTotals
-    ? `${formatBytes(presentation.used)} / ${formatBytes(presentation.limit)}`
-    : `-- / ${formatBytes(presentation.limit)}`;
-  limitRow.append(track, text);
-  cell.append(limitRow);
-  return cell;
-}
-
 function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeListHandlers): void {
   const nodeCell = element('div', 'node');
   const status = element('span', `node-status ${node.online ? 'online' : 'offline'}`);
@@ -158,7 +112,7 @@ function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeLis
     resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online, 'mem'),
     resourceCell(resourceRatio(report?.disk?.used, report?.disk?.total), node.online, 'disk'),
     networkCell(node),
-    trafficCell(node),
+    renderTrafficCell(node),
   );
 }
 
