@@ -19,15 +19,20 @@
 
 ## 开发
 
+需要 Node.js `22.12.0` 和 npm 10（参见 `.nvmrc` 与 `package.json`）。
+
 ```bash
-npm install
+npm ci
 npm run dev
-npm test
-npm run typecheck
+npm run check
 npm run package
 ```
 
-主题包根目录包含 `komari-theme.json`、`preview.png` 和 `dist/`。
+`dev` 和 `build` 会自动从 `flag-icons` 生成本地国旗资源；运行时不会请求外部图标服务。`package` 会先执行类型检查和测试，然后生成 `release/komari-btop-minimal.zip`。
+
+主题包根目录包含 `komari-theme.json`、`preview.png` 和 `dist/`。在启用了 Komari 私有站点模式时，查看节点数据需要已认证会话或有效的临时分享会话。
+
+项目采用 [MIT License](./LICENSE)；第三方国旗资源说明见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
 ---
 
@@ -52,12 +57,17 @@ Download the latest `komari-btop-minimal.zip` from GitHub Releases and import it
 
 ## Development
 
+Node.js 22.12–24.x and npm 10–11 are required (see `.nvmrc` and `package.json`).
+
 ```bash
-npm install
+npm ci
 npm run dev
-npm test
-npm run typecheck
+npm run check
 npm run package
 ```
 
-The installable package contains `komari-theme.json`, `preview.png`, and `dist/` at its root.
+`dev` and `build` automatically generate local flag assets from `flag-icons`; the running theme makes no external icon requests. `package` runs type checks and tests before creating `release/komari-btop-minimal.zip`.
+
+The installable package contains `komari-theme.json`, `preview.png`, and `dist/` at its root. A Komari private site requires an authenticated or valid temporary-share browser session to read node data.
+
+This project is available under the [MIT License](./LICENSE). See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for local flag asset attribution.

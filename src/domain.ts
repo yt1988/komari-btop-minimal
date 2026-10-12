@@ -1,13 +1,13 @@
 export type ResourceUsage = {
-  total: number;
-  used: number;
+  total: number | null;
+  used: number | null;
 };
 
 export type NetworkUsage = {
-  up: number;
-  down: number;
-  totalUp: number;
-  totalDown: number;
+  up: number | null;
+  down: number | null;
+  totalUp: number | null;
+  totalDown: number | null;
 };
 
 export type NodeMetadata = {

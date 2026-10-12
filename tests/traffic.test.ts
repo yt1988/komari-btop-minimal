@@ -17,12 +17,20 @@ describe('traffic rules', () => {
     expect(calculateTrafficUsage(traffic, 'unexpected')).toBe(40);
   });
 
-  it('distinguishes unlimited and limited nodes', () => {
+  it('distinguishes unlimited, limited, and unavailable traffic', () => {
     expect(getTrafficPresentation(traffic, null, null).limited).toBe(false);
     expect(getTrafficPresentation(traffic, 100, 'sum')).toMatchObject({
       limited: true,
       used: 50,
       ratio: 0.5,
+    });
+    expect(getTrafficPresentation({ up: 10, down: null }, 100, 'sum')).toMatchObject({
+      used: null,
+      ratio: 0,
+    });
+    expect(getTrafficPresentation({ up: 10, down: null }, 100, 'up')).toMatchObject({
+      used: 10,
+      ratio: 0.1,
     });
     expect(getTrafficPresentation(traffic, 0, 'sum').ratio).toBe(0);
   });

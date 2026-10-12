@@ -6,6 +6,7 @@ import {
   formatLatencyReadout,
   latencyCeiling,
   latencySeriesColor,
+  latencySeriesDash,
   toggleVisibleTasks,
 } from '../src/latency';
 
@@ -42,6 +43,8 @@ describe('latency selection and segmentation', () => {
     expect(new Set(LATENCY_SERIES_COLORS.slice(0, allTaskIds.length)).size).toBe(allTaskIds.length);
     expect(latencySeriesColor('unicom', allTaskIds)).toBe(latencySeriesColor('unicom', ['unicom']));
     expect(latencySeriesColor('mobile', allTaskIds)).toBe(latencySeriesColor('mobile', ['unicom', 'mobile']));
+    expect(latencySeriesDash('unicom', allTaskIds)).toBe(latencySeriesDash('unicom', ['unicom']));
+    expect(latencySeriesDash('mobile', allTaskIds)).toBe(latencySeriesDash('mobile', ['unicom', 'mobile']));
   });
 
   it('starts a new path when a sample gap is too large', () => {

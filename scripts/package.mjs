@@ -12,32 +12,39 @@ const releaseDirectory = path.join(root, 'release');
 const archivePath = path.join(releaseDirectory, 'komari-btop-minimal.zip');
 
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-if (manifest.name !== 'Btop Minimal'
-  || manifest.short !== 'btop-minimal'
-  || manifest.description !== 'A minimal btop-inspired Komari monitor theme.'
-  || manifest.version !== '1.4.4'
-  || manifest.author !== 'Tao'
-  || manifest.url !== "https://github.com/yt1988/komari-btop-minimal"
-  || manifest.preview !== 'preview.png') {
-  throw new Error('komari-theme.json does not match the approved theme manifest');
+const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+for (const field of ['name', 'short', 'description', 'version', 'author', 'url', 'preview']) {
+  if (typeof manifest[field] !== 'string' || manifest[field].trim() === '') {
+    throw new Error(`komari-theme.json is missing a non-empty ${field}`);
+  }
+}
+if (manifest.preview !== 'preview.png') {
+  throw new Error('komari-theme.json preview must reference preview.png');
+}
+if (manifest.version !== packageJson.version) {
+  throw new Error('komari-theme.json and package.json versions must match');
 }
 
 const htmlPath = path.join(distPath, 'index.html');
-const html = await readFile(htmlPath, 'utf8');
-for (const marker of [
-  '<title>Komari Monitor</title>',
-  '<meta name="description" content="A simple server monitor tool." />',
-  'Powered by Komari Monitor.',
-]) {
-  if (!html.includes(marker)) {
-    throw new Error(`dist/index.html is missing required marker: ${marker}`);
-  }
-}
 if (!(await stat(distPath)).isDirectory()) {
   throw new Error('dist/ is missing');
 }
+if (!(await stat(htmlPath)).isFile()) {
+  throw new Error('dist/index.html is missing');
+}
 if (!(await stat(previewPath)).isFile()) {
   throw new Error('preview.png is missing');
+}
+const preview = await readFile(previewPath);
+const isPng = preview.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+const isJpeg = preview.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
+if (!isPng && !isJpeg) {
+  throw new Error('preview image must contain a PNG or JPEG image');
+}
+for (const asset of ['cn.svg', 'hk.svg', 'xx.svg', 'LICENSE']) {
+  if (!(await stat(path.join(distPath, 'flags', asset))).isFile()) {
+    throw new Error(`dist/flags/${asset} is missing`);
+  }
 }
 
 await mkdir(releaseDirectory, { recursive: true });

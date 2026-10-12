@@ -29,16 +29,26 @@ export type LatencyReadoutEntry = {
   value: number;
 };
 
-export function latencySeriesColor(taskId: string, allTaskIds: readonly string[]): string {
+const LATENCY_SERIES_DASHES = ['none', '8 4', '3 3', '10 3 2 3', '2 4', '12 4'] as const;
+
+function seriesIndex(taskId: string, allTaskIds: readonly string[]): number {
   const index = allTaskIds.indexOf(taskId);
   if (index >= 0) {
-    return LATENCY_SERIES_COLORS[index % LATENCY_SERIES_COLORS.length]!;
+    return index;
   }
   let hash = 0;
   for (const character of taskId) {
     hash = (hash * 31 + character.charCodeAt(0)) | 0;
   }
-  return LATENCY_SERIES_COLORS[Math.abs(hash) % LATENCY_SERIES_COLORS.length]!;
+  return Math.abs(hash);
+}
+
+export function latencySeriesColor(taskId: string, allTaskIds: readonly string[]): string {
+  return LATENCY_SERIES_COLORS[seriesIndex(taskId, allTaskIds) % LATENCY_SERIES_COLORS.length]!;
+}
+
+export function latencySeriesDash(taskId: string, allTaskIds: readonly string[]): string {
+  return LATENCY_SERIES_DASHES[seriesIndex(taskId, allTaskIds) % LATENCY_SERIES_DASHES.length]!;
 }
 
 function nearestLatencyPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {

@@ -15,7 +15,7 @@ export function renderTrafficCell(node: NodeState, className = 'traffic'): HTMLD
   cell.dataset.mobileLabel = 'TRAFFIC';
 
   const network = node.report?.network;
-  const hasTotals = network !== null && network !== undefined;
+  const hasTotals = typeof network?.totalUp === 'number' && typeof network.totalDown === 'number';
   const current = element('div', 'traffic-current');
   for (const [direction, value] of [['down', network?.totalDown], ['up', network?.totalUp]] as const) {
     const tone = !node.online && hasTotals ? 'danger' : hasTotals ? 'ok' : node.online ? 'muted' : 'danger';
@@ -35,7 +35,7 @@ export function renderTrafficCell(node: NodeState, className = 'traffic'): HTMLD
     node.metadata.trafficLimitType,
   );
   const limitRow = element('div', `traffic-limit${presentation.tone === 'warning' ? ' warn' : ''}`);
-  if (!presentation.limited || !hasTotals) {
+  if (!presentation.limited || !hasTotals || presentation.used === null) {
     limitRow.classList.add('is-empty');
   } else if (!node.online) {
     limitRow.classList.add('danger');
@@ -47,7 +47,7 @@ export function renderTrafficCell(node: NodeState, className = 'traffic'): HTMLD
   track.append(fill);
   const text = element('span', 'limit-text');
   const limit = presentation.limit === null ? '--' : formatTraffic(presentation.limit);
-  text.textContent = hasTotals ? `${formatTraffic(presentation.used)} / ${limit}` : `-- / ${limit}`;
+  text.textContent = hasTotals && presentation.used !== null ? `${formatTraffic(presentation.used)} / ${limit}` : `-- / ${limit}`;
   limitRow.append(track, text);
   cell.append(limitRow);
   return cell;

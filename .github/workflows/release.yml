@@ -1,0 +1,28 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run package
+      - name: Verify tag version
+        shell: bash
+        run: test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/komari-btop-minimal.zip
+          generate_release_notes: true

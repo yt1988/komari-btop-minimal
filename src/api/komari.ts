@@ -147,18 +147,18 @@ function parseLiveReport(raw: unknown): LiveReport {
   const ram = recordValue(report, 'ram');
   const disk = recordValue(report, 'disk');
   const network = recordValue(report, 'network');
-  const resource = (source: JsonObject): { total: number; used: number } | null => {
+  const resource = (source: JsonObject): { total: number | null; used: number | null } | null => {
     const total = asNullableNumber(source.total);
     const used = asNullableNumber(source.used);
-    return total === null && used === null ? null : { total: total ?? 0, used: used ?? 0 };
+    return total === null && used === null ? null : { total, used };
   };
   const networkValue = [network.up, network.down, network.totalUp, network.totalDown]
     .some((value) => typeof value === 'number' && Number.isFinite(value))
     ? {
-      up: asFiniteNumber(network.up),
-      down: asFiniteNumber(network.down),
-      totalUp: asFiniteNumber(network.totalUp),
-      totalDown: asFiniteNumber(network.totalDown),
+      up: asNullableNumber(network.up),
+      down: asNullableNumber(network.down),
+      totalUp: asNullableNumber(network.totalUp),
+      totalDown: asNullableNumber(network.totalDown),
     }
     : null;
   return {
@@ -262,11 +262,14 @@ export async function fetchLatency(uuid: string, hours: number, signal?: AbortSi
 
 export type LiveSocketScope = 'all' | 'node';
 
+export type LiveSocketStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'stopped';
+
 export type LiveSocketOptions = {
   scope: LiveSocketScope;
   uuid?: string;
   onSnapshot: (snapshot: LiveSnapshot) => void;
   onError?: (error: Error) => void;
+  onStatusChange?: (status: LiveSocketStatus) => void;
 };
 
 export type LiveSocketHandle = {
@@ -278,8 +281,10 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  let requestPending = false;
   let retryIndex = 0;
   const delays = [1000, 2000, 4000, 8000, 16000, 30000];
+  const setStatus = (status: LiveSocketStatus): void => options.onStatusChange?.(status);
 
   const endpoint = (): string => {
     const base = typeof window === 'undefined' ? 'http://localhost/' : window.location.href;
@@ -290,60 +295,90 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
 
   const requestMessage = (): string => options.scope === 'node' && options.uuid ? `get ${options.uuid}` : 'get';
 
+  const request = (): void => {
+    if (socket?.readyState !== WebSocket.OPEN || requestPending) {
+      return;
+    }
+    requestPending = true;
+    socket.send(requestMessage());
+  };
+
+  const scheduleReconnect = (): void => {
+    if (stopped || timer !== null) {
+      return;
+    }
+    const delay = delays[Math.min(retryIndex, delays.length - 1)] ?? 30000;
+    retryIndex += 1;
+    setStatus('reconnecting');
+    timer = setTimeout(() => {
+      timer = null;
+      connect();
+    }, delay);
+  };
+
   const connect = (): void => {
     if (stopped) {
       return;
     }
+    requestPending = false;
+    setStatus(retryIndex === 0 ? 'connecting' : 'reconnecting');
     try {
       socket = new WebSocket(endpoint());
       socket.addEventListener('open', () => {
-        socket?.send(requestMessage());
+        if (stopped) {
+          return;
+        }
+        setStatus('connected');
+        request();
       });
       socket.addEventListener('message', (event) => {
+        requestPending = false;
         if (typeof event.data !== 'string') {
           return;
         }
         try {
           options.onSnapshot(parseLiveSnapshot(JSON.parse(event.data) as unknown));
           retryIndex = 0;
+          setStatus('connected');
         } catch (error) {
           options.onError?.(error instanceof Error ? error : new Error(String(error)));
+          setStatus('error');
         }
       });
-      socket.addEventListener('error', () => options.onError?.(new Error('/api/clients: websocket error')));
+      socket.addEventListener('error', () => {
+        options.onError?.(new Error('/api/clients: websocket error'));
+        setStatus('error');
+      });
       socket.addEventListener('close', () => {
         socket = null;
-        if (stopped) {
-          return;
+        requestPending = false;
+        if (!stopped) {
+          scheduleReconnect();
         }
-        const delay = delays[Math.min(retryIndex, delays.length - 1)] ?? 30000;
-        retryIndex += 1;
-        timer = setTimeout(connect, delay);
       });
     } catch (error) {
       options.onError?.(error instanceof Error ? error : new Error(String(error)));
-      timer = setTimeout(connect, delays[Math.min(retryIndex++, delays.length - 1)] ?? 30000);
+      setStatus('error');
+      scheduleReconnect();
     }
   };
 
   connect();
   return {
-    request: () => {
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(requestMessage());
-      }
-    },
+    request,
     stop: () => {
       if (stopped) {
         return;
       }
       stopped = true;
+      requestPending = false;
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
       }
       socket?.close();
       socket = null;
+      setStatus('stopped');
     },
   };
 }

@@ -9,34 +9,34 @@ export type TrafficLimitType = 'sum' | 'max' | 'min' | 'up' | 'down' | string;
 
 export type TrafficPresentation = {
   limited: boolean;
-  used: number;
+  used: number | null;
   limit: number | null;
   ratio: number;
   tone: MetricTone;
 };
 
-function safeValue(value: number | null): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+function safeValue(value: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 export function calculateTrafficUsage(
   traffic: TrafficDirection,
   type: TrafficLimitType | null | undefined,
-): number {
+): number | null {
   const up = safeValue(traffic.up);
   const down = safeValue(traffic.down);
   switch (type) {
-    case 'sum':
-      return up + down;
-    case 'min':
-      return Math.min(up, down);
     case 'up':
       return up;
     case 'down':
       return down;
+    case 'sum':
+      return up === null || down === null ? null : up + down;
+    case 'min':
+      return up === null || down === null ? null : Math.min(up, down);
     case 'max':
     default:
-      return Math.max(up, down);
+      return up === null || down === null ? null : Math.max(up, down);
   }
 }
 
@@ -51,7 +51,7 @@ export function getTrafficPresentation(
 ): TrafficPresentation {
   const used = calculateTrafficUsage(traffic, type);
   const validLimit = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? limit : null;
-  const ratio = validLimit === null ? 0 : Math.min(1, used / validLimit);
+  const ratio = validLimit === null || used === null ? 0 : Math.min(1, used / validLimit);
   return {
     limited: validLimit !== null,
     used,

@@ -1,6 +1,6 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
-import { LATENCY_RANGES, latencySeriesColor } from '../latency';
+import { LATENCY_RANGES, latencySeriesColor, latencySeriesDash } from '../latency';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
 import { renderTrafficCell } from './traffic';
@@ -8,6 +8,7 @@ import { renderTrafficCell } from './traffic';
 export type DetailHandlers = {
   onBack: () => void;
   onRangeChange: (hours: number) => void;
+  onLatencyRetry: () => void;
   onTaskToggle: (taskId: string) => void;
 };
 
@@ -98,7 +99,7 @@ function renderCore(container: HTMLElement, node: NodeState | null): void {
   status.dataset.role = 'status';
   control.append(back, status);
 
-  const title = element('h2', 'detail-name');
+  const title = element('h1', 'detail-name');
   title.dataset.role = 'name';
   updateDetailName(title, node);
 
@@ -154,12 +155,13 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
 
   const latencySection = element('section', 'latency');
   const heading = element('div', 'latency-heading');
-  const title = element('strong');
+  const title = element('h2', 'latency-title');
   title.textContent = 'latency';
-  heading.append(title);
 
   const controls = element('div', 'latency-left');
   const ranges = element('div', 'range-set');
+  ranges.setAttribute('role', 'group');
+  ranges.setAttribute('aria-label', 'Latency range');
   LATENCY_RANGES.forEach((range) => {
     const button = element('button', `range${options.latencyRange === range.hours ? ' active' : ''}`);
     button.type = 'button';
@@ -172,11 +174,14 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   heading.append(controls);
 
   const probes = element('div', 'probe-set');
+  probes.setAttribute('role', 'group');
+  probes.setAttribute('aria-label', 'Visible latency targets');
   taskIds.forEach((taskId) => {
     const button = element('button', `probe${options.visibleTaskIds.includes(taskId) ? ' active' : ''}`);
     button.type = 'button';
-    const dot = element('span', 'probe-dot');
-    dot.style.backgroundColor = latencySeriesColor(taskId, taskIds);
+    const dot = element('span', 'probe-swatch');
+    dot.style.color = latencySeriesColor(taskId, taskIds);
+    dot.style.borderTopStyle = latencySeriesDash(taskId, taskIds) === 'none' ? 'solid' : 'dashed';
     dot.setAttribute('aria-hidden', 'true');
     button.append(dot);
     const label = element('span');
@@ -193,12 +198,18 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   chart.dataset.role = 'latency-chart';
   if (options.latencyState === 'loading') {
     const loading = element('div', 'chart-message muted');
+    loading.setAttribute('role', 'status');
     loading.textContent = 'loading latency';
     chart.append(loading);
   } else if (options.latencyState === 'error') {
     const error = element('div', 'chart-message danger');
+    error.setAttribute('role', 'alert');
     error.textContent = 'latency unavailable';
-    chart.append(error);
+    const retry = element('button', 'retry');
+    retry.type = 'button';
+    retry.textContent = 'retry';
+    retry.addEventListener('click', options.handlers.onLatencyRetry);
+    chart.append(error, retry);
   } else {
     renderLatencyChart(chart, {
       query: options.latency,

@@ -50,6 +50,9 @@ describe('narrow viewport layout', () => {
     expect(styles.match(/\.table-end\s*\{([^}]*)\}/)?.[1]).not.toMatch(/border-bottom:/);
     expect(mobileStyles).toMatch(/'network network network traffic traffic traffic'/);
     expect(compactStyles).toMatch(/'network network network'\s*'traffic traffic traffic'/);
+    expect(narrowStyles).toMatch(/\.traffic-limit\s*\{[\s\S]*?grid-template-columns:\s*1fr;/);
+    expect(narrowStyles).toMatch(/\.traffic-limit \.limit-text\s*\{[\s\S]*?white-space:\s*normal;/);
+    expect(narrowStyles).toMatch(/\.chart-readout\s*\{[\s\S]*?position:\s*static;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?grid-template-rows:\s*13px\s+18px\s+15px;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?row-gap:\s*3px;/);
     expect(trafficView).toContain('formatTraffic');

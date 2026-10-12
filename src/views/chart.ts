@@ -5,6 +5,7 @@ import {
   latencyCeiling,
   latencyReadoutEntries,
   latencySeriesColor,
+  latencySeriesDash,
 } from '../latency';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -74,9 +75,8 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   graph.setAttribute('preserveAspectRatio', 'none');
   graph.setAttribute('role', 'img');
   graph.setAttribute('aria-label', 'Latency chart');
-  graph.setAttribute('tabindex', '0');
   const description = svgElement('desc');
-  description.textContent = 'Each latency target is drawn with its own consistent color.';
+  description.textContent = 'Each latency target uses a distinct color and line pattern.';
   graph.append(description);
 
   const grid = svgElement('g');
@@ -113,6 +113,10 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       const line = svgElement('line');
       line.classList.add('latency-segment');
       line.style.stroke = color;
+      const dash = latencySeriesDash(lineSeries.taskId, options.allTaskIds);
+      if (dash !== 'none') {
+        line.setAttribute('stroke-dasharray', dash);
+      }
       line.setAttribute('x1', String((segment.from.timestamp - start) / timeSpan * 1000));
       line.setAttribute('x2', String((segment.to.timestamp - start) / timeSpan * 1000));
       line.setAttribute('y1', String(280 - segment.from.value! / ceiling * 280));
@@ -145,21 +149,30 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   readout.hidden = true;
   graphArea.append(readout);
 
-  graph.addEventListener('pointermove', (event) => {
-    const bounds = graph.getBoundingClientRect();
-    if (bounds.width <= 0) {
-      return;
-    }
-    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
-    const timestamp = start + ratio * timeSpan;
+  const clearInspection = (): void => {
+    crosshair.style.visibility = 'hidden';
+    markers.forEach((marker) => {
+      marker.style.visibility = 'hidden';
+    });
+    readout.hidden = true;
+  };
+
+  const inspectTimestamp = (timestamp: number): void => {
+    graph.dataset.inspectedTimestamp = String(timestamp);
+    const ratio = Math.max(0, Math.min(1, (timestamp - start) / timeSpan));
     const x = ratio * 1000;
     crosshair.setAttribute('x1', String(x));
     crosshair.setAttribute('x2', String(x));
     crosshair.style.visibility = 'visible';
+    const entries = latencyReadoutEntries(timestamp, series, options.labels);
     series.forEach((lineSeries) => {
       const marker = markers.get(lineSeries.taskId);
       const point = nearestPoint(lineSeries, timestamp);
-      if (!marker || !point) {
+      if (!marker) {
+        return;
+      }
+      if (!point) {
+        marker.style.visibility = 'hidden';
         return;
       }
       marker.setAttribute('cx', String((point.timestamp - start) / timeSpan * 1000));
@@ -171,7 +184,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     timestampLabel.className = 'chart-readout-time';
     timestampLabel.textContent = formatLatencyTimestamp(timestamp, options.rangeHours);
     readout.append(timestampLabel);
-    latencyReadoutEntries(timestamp, series, options.labels).forEach((entry) => {
+    entries.forEach((entry) => {
       const separator = document.createTextNode(' · ');
       const value = document.createElement('span');
       value.className = 'chart-readout-item';
@@ -181,13 +194,31 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     });
     readout.style.left = `${ratio * 100}%`;
     readout.hidden = false;
+  };
+
+  const inspectPointer = (event: PointerEvent): void => {
+    const bounds = graph.getBoundingClientRect();
+    if (bounds.width <= 0) {
+      return;
+    }
+    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    inspectTimestamp(start + ratio * timeSpan);
+  };
+
+  graph.addEventListener('pointerdown', (event) => {
+    graph.setPointerCapture?.(event.pointerId);
+    inspectPointer(event);
   });
-  graph.addEventListener('pointerleave', () => {
-    crosshair.style.visibility = 'hidden';
-    markers.forEach((marker) => {
-      marker.style.visibility = 'hidden';
-    });
-    readout.hidden = true;
+  graph.addEventListener('pointermove', inspectPointer);
+  graph.addEventListener('pointerup', (event) => {
+    if (graph.hasPointerCapture?.(event.pointerId)) {
+      graph.releasePointerCapture(event.pointerId);
+    }
+  });
+  graph.addEventListener('pointerleave', (event) => {
+    if (event.pointerType === 'mouse') {
+      clearInspection();
+    }
   });
 }
 

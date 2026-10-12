@@ -91,6 +91,24 @@ describe('Komari response normalization', () => {
     });
   });
 
+  it('preserves unavailable live fields instead of fabricating zero values', () => {
+    expect(parseLiveSnapshot({
+      status: 'success',
+      data: {
+        online: ['node-1'],
+        data: {
+          'node-1': {
+            ram: { used: 100 },
+            network: { up: 42 },
+          },
+        },
+      },
+    }).data['node-1']).toMatchObject({
+      ram: { used: 100, total: null },
+      network: { up: 42, down: null, totalUp: null, totalDown: null },
+    });
+  });
+
   it('reads the public site name with a safe terminal fallback', () => {
     expect(parsePublicSettings({
       status: 'success',

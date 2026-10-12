@@ -5,7 +5,8 @@ import {
   fetchPingTasks,
   fetchPublicSettings,
 } from './api/komari';
-import type { LatencyQuery, LiveReport, NodeMetadata, NodeState, PingTask } from './domain';
+import type { LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
+import { reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
 import { toggleVisibleTasks } from './latency';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
@@ -13,6 +14,7 @@ import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
 
 type LatencyStatus = 'loading' | 'ready' | 'error';
+type LiveConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'stopped';
 
 type ApplicationState = {
   nodes: NodeMetadata[];
@@ -24,6 +26,8 @@ type ApplicationState = {
   metadataFailed: boolean;
   selectedGroup: string;
   lastUpdate: number | null;
+  lastSnapshotTimestamp: number | null;
+  liveConnection: LiveConnectionStatus;
   route: Route;
   routeKey: string;
   latencyRange: number;
@@ -48,24 +52,6 @@ function isNodeMetadata(value: unknown): value is NodeMetadata {
     && typeof node.diskTotal === 'number'
     && typeof node.trafficLimit === 'number'
     && typeof node.trafficLimitType === 'string';
-}
-
-function sameResource(left: LiveReport['ram'], right: LiveReport['ram']): boolean {
-  return left?.total === right?.total && left?.used === right?.used;
-}
-
-function sameNetwork(left: LiveReport['network'], right: LiveReport['network']): boolean {
-  return left?.up === right?.up
-    && left?.down === right?.down
-    && left?.totalUp === right?.totalUp
-    && left?.totalDown === right?.totalDown;
-}
-
-function liveReportChanged(previous: LiveReport | undefined, next: LiveReport): boolean {
-  return previous?.cpuUsage !== next.cpuUsage
-    || !sameResource(previous?.ram ?? null, next.ram)
-    || !sameResource(previous?.disk ?? null, next.disk)
-    || !sameNetwork(previous?.network ?? null, next.network);
 }
 
 function currentRoute(): Route {
@@ -111,11 +97,12 @@ export function startApp(root: HTMLElement): () => void {
   if (migratedPath !== null) {
     window.history.replaceState(null, '', migratedPath);
   }
-  root.innerHTML = '<div class="terminal"><header class="header"><div><span class="prompt" data-role="site-name">Komari</span>:~$ nodes</div><div class="header-right" data-role="last-update">last update: --</div></header><main data-role="page"></main></div>';
+  root.innerHTML = '<div class="terminal"><header class="header"><div><span class="prompt" data-role="site-name">Komari</span>:~$ nodes</div><div class="header-right" data-role="last-update">last update: --</div><div class="header-live" data-role="live-status" aria-live="polite" aria-atomic="true"></div></header><main data-role="page"></main></div>';
   const page = root.querySelector<HTMLElement>('[data-role="page"]');
   const timestamp = root.querySelector<HTMLElement>('[data-role="last-update"]');
   const siteName = root.querySelector<HTMLElement>('[data-role="site-name"]');
-  if (!page || !timestamp || !siteName) {
+  const liveStatus = root.querySelector<HTMLElement>('[data-role="live-status"]');
+  if (!page || !timestamp || !siteName || !liveStatus) {
     throw new Error('Missing application shell elements');
   }
 
@@ -129,6 +116,8 @@ export function startApp(root: HTMLElement): () => void {
     metadataFailed: false,
     selectedGroup: 'all',
     lastUpdate: null,
+    lastSnapshotTimestamp: null,
+    liveConnection: 'connecting',
     route: currentRoute(),
     routeKey: '',
     latencyRange: 24,
@@ -138,6 +127,9 @@ export function startApp(root: HTMLElement): () => void {
   };
   let latencyController: AbortController | null = null;
   let latencyRequestId = 0;
+  let latencyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let metadataController: AbortController | null = null;
+  let metadataRequestId = 0;
   let stopped = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let metadataTimer: ReturnType<typeof setInterval> | null = null;
@@ -161,6 +153,22 @@ export function startApp(root: HTMLElement): () => void {
 
   const updateTimestamp = (): void => {
     timestamp.textContent = formatRefreshTime(state.lastUpdate);
+  };
+
+  const announce = (message: string): void => {
+    liveStatus.textContent = message;
+  };
+
+  const updateLiveConnection = (status: LiveConnectionStatus): void => {
+    const previous = state.liveConnection;
+    state.liveConnection = status;
+    if (status === 'error') {
+      announce('live telemetry unavailable; reconnecting');
+    } else if (status === 'reconnecting' && previous !== 'reconnecting') {
+      announce('reconnecting live telemetry');
+    } else if (status === 'connected' && previous === 'error') {
+      announce('live telemetry connected; waiting for data');
+    }
   };
 
   const loadSiteName = async (): Promise<void> => {
@@ -200,8 +208,8 @@ export function startApp(root: HTMLElement): () => void {
       }
       return tasks;
     }).catch(() => {
-      if (!stopped) {
-        state.tasksReady = true;
+      if (!stopped && state.route.type === 'detail') {
+        announce('latency targets unavailable; retrying when needed');
       }
       return [];
     }).finally(() => {
@@ -250,10 +258,13 @@ export function startApp(root: HTMLElement): () => void {
             return;
           }
           state.latencyRange = hours;
-            loadLatency(detailRoute.uuid, hours);
+          loadLatency(detailRoute.uuid, hours);
+        },
+        onLatencyRetry: () => {
+          loadLatency(detailRoute.uuid, state.latencyRange);
         },
         onTaskToggle: (taskId) => {
-            const currentIds = allTaskIds(state, detailRoute.uuid);
+          const currentIds = allTaskIds(state, detailRoute.uuid);
           const currentVisible = state.visibleTaskIds === null ? currentIds : state.visibleTaskIds;
           state.visibleTaskIds = toggleVisibleTasks(currentIds, currentVisible, taskId);
           render();
@@ -262,27 +273,43 @@ export function startApp(root: HTMLElement): () => void {
     });
   };
 
+  const clearLatencyRefresh = (): void => {
+    if (latencyRefreshTimer !== null) {
+      clearTimeout(latencyRefreshTimer);
+      latencyRefreshTimer = null;
+    }
+  };
+
   const loadLatency = (uuid: string, hours: number): void => {
+    clearLatencyRefresh();
     latencyController?.abort();
     const requestId = ++latencyRequestId;
-    latencyController = new AbortController();
-    state.latency = null;
-    state.latencyStatus = 'loading';
-    render();
-    void fetchLatency(uuid, hours, latencyController.signal).then((query) => {
+    const controller = new AbortController();
+    latencyController = controller;
+    state.latencyStatus = state.latency === null ? 'loading' : 'ready';
+    if (state.latency === null) {
+      render();
+    }
+    void fetchLatency(uuid, hours, controller.signal).then((query) => {
       if (stopped || requestId !== latencyRequestId || state.route.type !== 'detail' || state.route.uuid !== uuid || state.latencyRange !== hours) {
         return;
       }
       state.latency = query;
       state.latencyStatus = 'ready';
       render();
+      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours), 60_000);
     }).catch((error: unknown) => {
-      if (stopped || requestId !== latencyRequestId || (error instanceof DOMException && error.name === 'AbortError')) {
+      const aborted = error instanceof DOMException && error.name === 'AbortError';
+      if (stopped || requestId !== latencyRequestId || aborted) {
         return;
       }
-      state.latency = null;
       state.latencyStatus = 'error';
       render();
+      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours), 15_000);
+    }).finally(() => {
+      if (latencyController === controller) {
+        latencyController = null;
+      }
     });
   };
 
@@ -294,7 +321,9 @@ export function startApp(root: HTMLElement): () => void {
     }
     state.route = route;
     state.routeKey = key;
+    clearLatencyRefresh();
     latencyController?.abort();
+    latencyController = null;
     state.latency = null;
     state.latencyRange = 24;
     state.latencyStatus = 'loading';
@@ -302,9 +331,9 @@ export function startApp(root: HTMLElement): () => void {
     if (route.type === 'detail' && state.metadataReady && state.nodes.some((node) => node.uuid === route.uuid)) {
       void ensurePingTasks();
       loadLatency(route.uuid, state.latencyRange);
-    } else {
-      render();
+      return;
     }
+    render();
   };
 
   const refreshMetadata = async (): Promise<void> => {
@@ -323,29 +352,49 @@ export function startApp(root: HTMLElement): () => void {
       state.nodes = nodeMetadataCache;
       state.metadataReady = true;
       render();
+      const cachedRoute = state.route;
+      if (cachedRoute.type === 'detail' && state.nodes.some((node) => node.uuid === cachedRoute.uuid)) {
+        void ensurePingTasks();
+        loadLatency(cachedRoute.uuid, state.latencyRange);
+      }
     }
-    const nodesResult = await Promise.allSettled([fetchNodeMetadata()]);
-    if (stopped) {
-      return;
-    }
-    const nodeResult = nodesResult[0];
-    if (nodeResult?.status === 'fulfilled') {
-      state.nodes = nodeResult.value;
-      nodeMetadataCache = state.nodes;
+
+    metadataController?.abort();
+    const controller = new AbortController();
+    metadataController = controller;
+    const requestId = ++metadataRequestId;
+    try {
+      const nodes = await fetchNodeMetadata(controller.signal);
+      if (stopped || requestId !== metadataRequestId) {
+        return;
+      }
+      state.nodes = nodes;
+      nodeMetadataCache = nodes;
       try {
-        window.sessionStorage.setItem('komari-btop-minimal:nodes:v1', JSON.stringify(state.nodes));
+        window.sessionStorage.setItem('komari-btop-minimal:nodes:v1', JSON.stringify(nodes));
       } catch {
       }
       state.metadataFailed = false;
-    } else {
+    } catch (error: unknown) {
+      const aborted = error instanceof DOMException && error.name === 'AbortError';
+      if (stopped || requestId !== metadataRequestId || aborted) {
+        return;
+      }
       state.metadataFailed = state.nodes.length === 0;
+    } finally {
+      if (metadataController === controller) {
+        metadataController = null;
+      }
+    }
+    if (stopped || requestId !== metadataRequestId) {
+      return;
     }
     state.metadataReady = true;
     if (state.selectedGroup !== 'all' && !state.nodes.some((node) => node.group.trim() === state.selectedGroup)) {
       state.selectedGroup = 'all';
     }
     const route = state.route;
-    if (route.type === 'detail' && state.nodes.some((node) => node.uuid === route.uuid) && latencyController === null) {
+    if (route.type === 'detail' && state.nodes.some((node) => node.uuid === route.uuid) && latencyController === null && state.latency === null) {
       void ensurePingTasks();
       loadLatency(route.uuid, state.latencyRange);
       return;
@@ -353,30 +402,49 @@ export function startApp(root: HTMLElement): () => void {
     render();
   };
 
-  const applySnapshot = (snapshot: { online: string[]; data: Record<string, LiveReport> }): void => {
-    const changedUuids = new Set<string>();
-    const nextOnline = new Set(snapshot.online);
-    for (const uuid of new Set([...state.online, ...nextOnline])) {
-      if (state.online.has(uuid) !== nextOnline.has(uuid)) {
-        changedUuids.add(uuid);
-      }
+  const applySnapshot = (snapshot: LiveSnapshot): void => {
+    const reconciled = reconcileLiveSnapshot(
+      state.online,
+      state.reports,
+      snapshot,
+      state.lastSnapshotTimestamp,
+    );
+    if (reconciled === null) {
+      return;
     }
-    state.online = new Set(snapshot.online);
-    for (const [uuid, report] of Object.entries(snapshot.data)) {
-      if (liveReportChanged(state.reports.get(uuid), report)) {
-        changedUuids.add(uuid);
-      }
-      state.reports.set(uuid, report);
-    }
+    const hadSnapshot = state.lastUpdate !== null;
+    state.online = reconciled.online;
+    state.reports = reconciled.reports;
+    state.lastSnapshotTimestamp = reconciled.latestTimestamp ?? state.lastSnapshotTimestamp;
     state.lastUpdate = Date.now();
     updateTimestamp();
+
+    if (hadSnapshot && reconciled.onlineChangedUuids.size > 0) {
+      const route = state.route;
+      if (route.type === 'detail' && reconciled.onlineChangedUuids.has(route.uuid)) {
+        announce(`${getCurrentNode()?.metadata.name ?? 'node'} is ${state.online.has(route.uuid) ? 'online' : 'offline'}`);
+      } else if (reconciled.onlineChangedUuids.size === 1) {
+        const uuid = [...reconciled.onlineChangedUuids][0] ?? '';
+        const name = state.nodes.find((node) => node.uuid === uuid)?.name ?? 'node';
+        announce(`${name} is ${state.online.has(uuid) ? 'online' : 'offline'}`);
+      } else {
+        announce(`${reconciled.onlineChangedUuids.size} node availability changes`);
+      }
+    }
+
+    if (reconciled.changedUuids.size === 0) {
+      return;
+    }
     if (state.route.type === 'detail') {
+      if (!reconciled.changedUuids.has(state.route.uuid)) {
+        return;
+      }
       const core = page.querySelector<HTMLElement>('.detail-core');
       if (core) {
         updateDetailCore(core, getCurrentNode());
       }
     } else if (state.metadataReady) {
-      updateNodeRows(page, getNodeStates(), nodeHandlers, changedUuids);
+      updateNodeRows(page, getNodeStates(), nodeHandlers, reconciled.changedUuids);
     }
   };
 
@@ -395,6 +463,7 @@ export function startApp(root: HTMLElement): () => void {
   liveSocket = createLiveSocket({
     scope: 'all',
     onSnapshot: applySnapshot,
+    onStatusChange: updateLiveConnection,
   });
   refreshTimer = setInterval(() => liveSocket?.request(), 3000);
   metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
@@ -407,7 +476,9 @@ export function startApp(root: HTMLElement): () => void {
 
   return () => {
     stopped = true;
+    clearLatencyRefresh();
     latencyController?.abort();
+    metadataController?.abort();
     liveSocket?.stop();
     if (refreshTimer !== null) {
       clearInterval(refreshTimer);

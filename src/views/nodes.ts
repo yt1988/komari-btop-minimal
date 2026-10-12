@@ -58,7 +58,7 @@ function resourceCell(value: number | null, online: boolean, label: 'cpu' | 'mem
   return cell;
 }
 
-function resourceRatio(used: number | undefined, total: number | undefined): number | null {
+function resourceRatio(used: number | null | undefined, total: number | null | undefined): number | null {
   if (typeof used !== 'number' || typeof total !== 'number' || total <= 0) {
     return null;
   }
@@ -92,6 +92,7 @@ function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeLis
   const nodeCell = element('div', 'node');
   const status = element('span', `node-status ${node.online ? 'online' : 'offline'}`);
   status.textContent = '●';
+  status.setAttribute('role', 'img');
   status.setAttribute('aria-label', node.online ? 'online' : 'offline');
   const region = regionFlag(node.metadata.region, 'node-flag');
   if (region) {
@@ -152,6 +153,8 @@ export function renderNodeList(
   const section = element('section', 'nodes');
   const command = element('div', 'command');
   const filters = element('div', 'filters');
+  filters.setAttribute('role', 'group');
+  filters.setAttribute('aria-label', 'Filter nodes by group');
   const groups = ['all', ...new Set(nodes.map((node) => node.metadata.group.trim()).filter((group) => group && group.toLowerCase() !== 'offline' && group.toLowerCase() !== 'all'))];
   groups.forEach((group) => {
     const button = element('button', `filter${selectedGroup === group ? ' active' : ''}`);
