@@ -31,7 +31,8 @@ describe('narrow viewport layout', () => {
     expect(styles).toMatch(/\.traffic\s*\{[\s\S]*?grid-template-rows:\s*18px\s+15px;/);
     expect(styles).toMatch(/\.network\s*\{[^}]*grid-template-rows:\s*18px\s+15px;/);
     expect(styles).not.toMatch(/\.traffic\.has-no-limit\s*\{[\s\S]*?grid-template-rows:\s*1fr;/);
-    expect(styles).toMatch(/\.traffic-limit\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;/);
+    expect(styles).toMatch(/\.traffic-limit\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
+    expect(styles).toMatch(/\.limit-track\s*\{[\s\S]*?width:\s*100%;/);
     expect(styles).toMatch(/\.metric-network\s*,\s*\.metric-traffic\s+\.traffic-current\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/);
     expect(mobileStyles).toMatch(/'network network network traffic traffic traffic'/);
     expect(compactStyles).toMatch(/'network network network'\s*'traffic traffic traffic'/);

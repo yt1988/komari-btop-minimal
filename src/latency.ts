@@ -9,13 +9,37 @@ export const LATENCY_RANGES = [
   { label: '30d', hours: 720 },
 ] as const;
 
-export type LatencyTone = 'normal' | 'warning' | 'danger';
+export const LATENCY_SERIES_COLORS = [
+  '#20b8ff',
+  '#a8e600',
+  '#ffb347',
+  '#ff6b8a',
+  '#b58cff',
+  '#35f477',
+] as const;
 
 export type LatencySegment = {
-  from: LatencyPoint;
-  to: LatencyPoint;
-  tone: LatencyTone;
+  from: LatencyPoint & { value: number };
+  to: LatencyPoint & { value: number };
 };
+
+export type LatencyReadoutEntry = {
+  taskId: string;
+  label: string;
+  value: number;
+};
+
+export function latencySeriesColor(taskId: string, allTaskIds: readonly string[]): string {
+  const index = allTaskIds.indexOf(taskId);
+  if (index >= 0) {
+    return LATENCY_SERIES_COLORS[index % LATENCY_SERIES_COLORS.length]!;
+  }
+  let hash = 0;
+  for (const character of taskId) {
+    hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  }
+  return LATENCY_SERIES_COLORS[Math.abs(hash) % LATENCY_SERIES_COLORS.length]!;
+}
 
 function nearestLatencyPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {
   let nearest: { timestamp: number; value: number } | null = null;
@@ -41,6 +65,25 @@ export function formatLatencyTimestamp(timestamp: number, rangeHours: number): s
   return `${date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
+export function latencyReadoutEntries(
+  timestamp: number,
+  series: LatencySeries[],
+  labels: Map<string, string>,
+): LatencyReadoutEntry[] {
+  const entries: LatencyReadoutEntry[] = [];
+  for (const lineSeries of series) {
+    const point = nearestLatencyPoint(lineSeries, timestamp);
+    if (point) {
+      entries.push({
+        taskId: lineSeries.taskId,
+        label: labels.get(lineSeries.taskId) ?? lineSeries.label,
+        value: point.value,
+      });
+    }
+  }
+  return entries;
+}
+
 export function formatLatencyReadout(
   timestamp: number,
   series: LatencySeries[],
@@ -48,11 +91,8 @@ export function formatLatencyReadout(
   rangeHours: number,
 ): string {
   const values = [formatLatencyTimestamp(timestamp, rangeHours)];
-  for (const lineSeries of series) {
-    const point = nearestLatencyPoint(lineSeries, timestamp);
-    if (point) {
-      values.push(`${labels.get(lineSeries.taskId) ?? lineSeries.label} ${point.value.toFixed(1)}ms`);
-    }
+  for (const entry of latencyReadoutEntries(timestamp, series, labels)) {
+    values.push(`${entry.label} ${entry.value.toFixed(1)}ms`);
   }
   return values.join(' · ');
 }
@@ -81,16 +121,6 @@ export function toggleVisibleTasks(
 
 export function filterLatencySeries(series: LatencySeries[], visibleTaskIds: string[]): LatencySeries[] {
   return series.filter((item) => visibleTaskIds.includes(item.taskId));
-}
-
-export function latencyTone(value: number): LatencyTone {
-  if (value < 100) {
-    return 'normal';
-  }
-  if (value <= 200) {
-    return 'warning';
-  }
-  return 'danger';
 }
 
 export function latencyCeiling(seriesOrPoints: LatencySeries[] | LatencyPoint[]): number {
@@ -124,24 +154,7 @@ export function buildLatencySegments(points: LatencyPoint[], sampleIntervalMs: n
     }
     const lastPoint = previous;
     if (lastPoint !== null && point.timestamp > lastPoint.timestamp && point.timestamp - lastPoint.timestamp <= maxGap) {
-      const boundaries = [100, 200]
-        .filter((threshold) => threshold > Math.min(lastPoint.value, point.value) && threshold < Math.max(lastPoint.value, point.value))
-        .map((threshold) => ({
-          timestamp: lastPoint.timestamp + ((threshold - lastPoint.value) / (point.value - lastPoint.value)) * (point.timestamp - lastPoint.timestamp),
-          value: threshold,
-        }));
-      const splitPoints = [lastPoint, ...boundaries, point].sort((left, right) => left.timestamp - right.timestamp);
-      for (let index = 1; index < splitPoints.length; index += 1) {
-        const from = splitPoints[index - 1];
-        const to = splitPoints[index];
-        if (from && to) {
-          segments.push({
-            from,
-            to,
-            tone: latencyTone((from.value + to.value) / 2),
-          });
-        }
-      }
+      segments.push({ from: lastPoint, to: point });
     }
     previous = point;
   }

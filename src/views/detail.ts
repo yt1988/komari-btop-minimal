@@ -1,6 +1,6 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
-import { LATENCY_RANGES } from '../latency';
+import { LATENCY_RANGES, latencySeriesColor } from '../latency';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
 import { renderTrafficCell } from './traffic';
@@ -175,7 +175,13 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   taskIds.forEach((taskId) => {
     const button = element('button', `probe${options.visibleTaskIds.includes(taskId) ? ' active' : ''}`);
     button.type = 'button';
-    button.textContent = taskLabels.get(taskId) ?? taskId;
+    const dot = element('span', 'probe-dot');
+    dot.style.backgroundColor = latencySeriesColor(taskId, taskIds);
+    dot.setAttribute('aria-hidden', 'true');
+    button.append(dot);
+    const label = element('span');
+    label.textContent = taskLabels.get(taskId) ?? taskId;
+    button.append(label);
     button.setAttribute('aria-pressed', String(options.visibleTaskIds.includes(taskId)));
     button.addEventListener('click', () => options.handlers.onTaskToggle(taskId));
     probes.append(button);
@@ -197,6 +203,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     renderLatencyChart(chart, {
       query: options.latency,
       visibleTaskIds: options.visibleTaskIds.length ? options.visibleTaskIds : taskIds,
+      allTaskIds: taskIds,
       labels: taskLabels,
       rangeHours: options.latencyRange,
     });

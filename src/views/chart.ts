@@ -1,5 +1,11 @@
 import type { LatencyQuery, LatencySeries } from '../domain';
-import { buildLatencySegments, formatLatencyReadout, formatLatencyTimestamp, latencyCeiling } from '../latency';
+import {
+  buildLatencySegments,
+  formatLatencyTimestamp,
+  latencyCeiling,
+  latencyReadoutEntries,
+  latencySeriesColor,
+} from '../latency';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -26,6 +32,7 @@ function nearestPoint(series: LatencySeries, timestamp: number): { timestamp: nu
 export type LatencyChartOptions = {
   query: LatencyQuery | null;
   visibleTaskIds: string[];
+  allTaskIds: string[];
   labels: Map<string, string>;
   rangeHours: number;
 };
@@ -69,7 +76,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   graph.setAttribute('aria-label', 'Latency chart');
   graph.setAttribute('tabindex', '0');
   const description = svgElement('desc');
-  description.textContent = 'Green below 100 milliseconds, yellow from 100 through 200 milliseconds, and red above 200 milliseconds.';
+  description.textContent = 'Each latency target is drawn with its own consistent color.';
   graph.append(description);
 
   const grid = svgElement('g');
@@ -96,6 +103,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
 
   const markers = new Map<string, SVGCircleElement>();
   series.forEach((lineSeries) => {
+    const color = latencySeriesColor(lineSeries.taskId, options.allTaskIds);
     const group = svgElement('g');
     group.setAttribute('aria-label', options.labels.get(lineSeries.taskId) ?? lineSeries.label);
     const sampleInterval = options.query?.intervalSeconds && options.query.intervalSeconds > 0
@@ -103,7 +111,8 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       : Math.max(1, options.rangeHours * 60 / 480) * 60_000;
     for (const segment of buildLatencySegments(lineSeries.points, sampleInterval)) {
       const line = svgElement('line');
-      line.classList.add('latency-segment', segment.tone);
+      line.classList.add('latency-segment');
+      line.style.stroke = color;
       line.setAttribute('x1', String((segment.from.timestamp - start) / timeSpan * 1000));
       line.setAttribute('x2', String((segment.to.timestamp - start) / timeSpan * 1000));
       line.setAttribute('y1', String(280 - segment.from.value! / ceiling * 280));
@@ -112,6 +121,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     }
     const marker = svgElement('circle');
     marker.classList.add('point');
+    marker.style.fill = color;
     marker.setAttribute('r', '3');
     marker.style.visibility = 'hidden';
     graph.append(group, marker);
@@ -156,7 +166,19 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       marker.setAttribute('cy', String(280 - point.value / ceiling * 280));
       marker.style.visibility = 'visible';
     });
-    readout.textContent = formatLatencyReadout(timestamp, series, options.labels, options.rangeHours);
+    readout.replaceChildren();
+    const timestampLabel = document.createElement('span');
+    timestampLabel.className = 'chart-readout-time';
+    timestampLabel.textContent = formatLatencyTimestamp(timestamp, options.rangeHours);
+    readout.append(timestampLabel);
+    latencyReadoutEntries(timestamp, series, options.labels).forEach((entry) => {
+      const separator = document.createTextNode(' · ');
+      const value = document.createElement('span');
+      value.className = 'chart-readout-item';
+      value.style.color = latencySeriesColor(entry.taskId, options.allTaskIds);
+      value.textContent = `${entry.label} ${entry.value.toFixed(1)}ms`;
+      readout.append(separator, value);
+    });
     readout.style.left = `${ratio * 100}%`;
     readout.hidden = false;
   });

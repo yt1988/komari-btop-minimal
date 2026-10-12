@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   LATENCY_RANGES,
+  LATENCY_SERIES_COLORS,
   buildLatencySegments,
   formatLatencyReadout,
   latencyCeiling,
+  latencySeriesColor,
   toggleVisibleTasks,
 } from '../src/latency';
 
@@ -26,17 +28,20 @@ describe('latency selection and segmentation', () => {
     expect(toggleVisibleTasks(['unicom', 'mobile'], ['unicom'], 'mobile')).toEqual(['unicom', 'mobile']);
   });
 
-  it('splits segments at latency thresholds and assigns each tone', () => {
+  it('keeps a series continuous when it crosses latency thresholds', () => {
     const segments = buildLatencySegments([
       { timestamp: 0, value: 50 },
       { timestamp: 10, value: 250 },
     ], 100);
-    expect(segments.map((segment) => [segment.from.timestamp, segment.to.timestamp, segment.tone])).toEqual([
-      [0, 2.5, 'normal'],
-      [2.5, 7.5, 'warning'],
-      [7.5, 10, 'danger'],
-    ]);
+    expect(segments.map((segment) => [segment.from.timestamp, segment.to.timestamp])).toEqual([[0, 10]]);
     expect(latencyCeiling([{ timestamp: 0, value: 201 }])).toBe(300);
+  });
+
+  it('keeps target colors stable when the visible selection changes', () => {
+    const allTaskIds = ['unicom', 'mobile', 'telecom'];
+    expect(new Set(LATENCY_SERIES_COLORS.slice(0, allTaskIds.length)).size).toBe(allTaskIds.length);
+    expect(latencySeriesColor('unicom', allTaskIds)).toBe(latencySeriesColor('unicom', ['unicom']));
+    expect(latencySeriesColor('mobile', allTaskIds)).toBe(latencySeriesColor('mobile', ['unicom', 'mobile']));
   });
 
   it('starts a new path when a sample gap is too large', () => {
