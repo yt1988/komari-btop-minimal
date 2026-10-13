@@ -55,7 +55,10 @@ describe('narrow viewport layout', () => {
     expect(narrowStyles).toMatch(/\.chart-readout\s*\{[\s\S]*?position:\s*static;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?grid-template-rows:\s*13px\s+18px\s+15px;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?row-gap:\s*3px;/);
-    expect(styles).toMatch(/\.filter\[aria-pressed='true'\]::after\s*\{[\s\S]*?height:\s*2px;[\s\S]*?background:\s*#35f477;/);
+    expect(styles).not.toContain(".filter[aria-pressed='true']::after");
+    expect(styles).toMatch(/\.filter-emoji\s*\{[\s\S]*?opacity:\s*0\.42;[\s\S]*?filter:\s*brightness\(0\.7\)\s+saturate\(0\.6\);/);
+    expect(styles).toMatch(/\.filter\[aria-pressed='true'\]\s+\.filter-emoji\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?filter:\s*none;/);
+    expect(styles).toMatch(/\.theme-link\s*\{[\s\S]*?color:\s*inherit;[\s\S]*?text-decoration:\s*none;/);
     expect(styles).toMatch(/\.theme-link:focus-visible/);
     expect(trafficView).toContain('formatTraffic');
     expect(trafficView).toContain('traffic-current');

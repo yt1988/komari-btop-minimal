@@ -156,10 +156,23 @@ export function renderNodeList(
   filters.setAttribute('role', 'group');
   filters.setAttribute('aria-label', 'Filter nodes by group');
   const groups = ['all', ...new Set(nodes.map((node) => node.metadata.group.trim()).filter((group) => group && group.toLowerCase() !== 'offline' && group.toLowerCase() !== 'all'))];
+  const emojiLabels: Record<string, string> = {
+    '🏠': 'Home nodes',
+    '🌐': 'Global nodes',
+  };
   groups.forEach((group) => {
     const button = element('button', `filter${selectedGroup === group ? ' active' : ''}`);
     button.type = 'button';
-    button.textContent = group;
+    const accessibleLabel = emojiLabels[group];
+    if (accessibleLabel) {
+      button.setAttribute('aria-label', accessibleLabel);
+      const emoji = element('span', 'filter-emoji');
+      emoji.textContent = group;
+      emoji.setAttribute('aria-hidden', 'true');
+      button.append(emoji);
+    } else {
+      button.textContent = group;
+    }
     button.setAttribute('aria-pressed', String(selectedGroup === group));
     button.addEventListener('click', () => handlers.onGroupSelect(group));
     filters.append(button);
