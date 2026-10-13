@@ -9,6 +9,12 @@ import type { LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, P
 import { reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
 import { toggleVisibleTasks } from './latency';
+import {
+  parseLatencyColorRegistry,
+  reconcileLatencyColors,
+  serializeLatencyColorRegistry,
+  type NodeLatencyColorRegistry,
+} from './latencyColors';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
@@ -135,6 +141,20 @@ export function startApp(root: HTMLElement): () => void {
   let metadataTimer: ReturnType<typeof setInterval> | null = null;
   let liveSocket: ReturnType<typeof createLiveSocket> | null = null;
   let pingTasksRequest: Promise<PingTask[]> | null = null;
+  const latencyColorRegistry: NodeLatencyColorRegistry = (() => {
+    try {
+      return parseLatencyColorRegistry(JSON.parse(window.sessionStorage.getItem('komari-btop-minimal:latency-colors:v1') ?? '[]'));
+    } catch {
+      return new Map();
+    }
+  })();
+
+  const persistLatencyColors = (): void => {
+    try {
+      window.sessionStorage.setItem('komari-btop-minimal:latency-colors:v1', JSON.stringify(serializeLatencyColorRegistry(latencyColorRegistry)));
+    } catch {
+    }
+  };
 
   const getNodeStates = (): NodeState[] => state.nodes.map((metadata) => ({
     metadata,
@@ -242,6 +262,8 @@ export function startApp(root: HTMLElement): () => void {
       visible = ids;
     }
     const detailRoute = state.route;
+    const colorPlan = reconcileLatencyColors(latencyColorRegistry, detailRoute.uuid, ids);
+    persistLatencyColors();
     renderDetailView(page, {
       node: getCurrentNode(),
       tasks: state.tasks,
@@ -249,6 +271,8 @@ export function startApp(root: HTMLElement): () => void {
       latencyState: state.latencyStatus,
       latencyRange: state.latencyRange,
       visibleTaskIds: visible,
+      colorAssignments: colorPlan.assignments,
+      overflowTaskIds: colorPlan.overflowTaskIds,
       handlers: {
         onBack: () => {
           navigate({ type: 'nodes' });

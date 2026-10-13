@@ -17,6 +17,30 @@ export const LATENCY_SERIES_COLORS = [
   '#a35229',
 ] as const;
 
+export type LatencyColorAssignment = ReadonlyMap<string, string>;
+
+/**
+ * Produces a unique color for every overlaid target. Task IDs are sorted before
+ * allocation, so the result does not depend on API ordering or selected range.
+ * Targets beyond the three comparison slots are deliberately returned separately.
+ */
+export function assignLatencyColors(taskIds: readonly string[]): {
+  assignments: Map<string, string>;
+  overflowTaskIds: string[];
+} {
+  const assignments = new Map<string, string>();
+  const overflowTaskIds: string[] = [];
+  for (const taskId of [...new Set(taskIds)].sort()) {
+    const color = LATENCY_SERIES_COLORS[assignments.size];
+    if (color) {
+      assignments.set(taskId, color);
+    } else {
+      overflowTaskIds.push(taskId);
+    }
+  }
+  return { assignments, overflowTaskIds };
+}
+
 export type LatencySegment = {
   from: LatencyPoint & { value: number };
   to: LatencyPoint & { value: number };

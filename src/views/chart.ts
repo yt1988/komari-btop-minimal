@@ -6,6 +6,7 @@ import {
   latencyReadoutEntries,
   latencySeriesColor,
 } from '../latency';
+import type { LatencyColorAssignment } from '../latencyColors';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -33,6 +34,7 @@ export type LatencyChartOptions = {
   query: LatencyQuery | null;
   visibleTaskIds: string[];
   allTaskIds: string[];
+  colorAssignments: LatencyColorAssignment;
   labels: Map<string, string>;
   rangeHours: number;
 };
@@ -102,7 +104,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
 
   const markers = new Map<string, SVGCircleElement>();
   series.forEach((lineSeries) => {
-    const color = latencySeriesColor(lineSeries.taskId, options.allTaskIds);
+    const color = options.colorAssignments.get(lineSeries.taskId) ?? latencySeriesColor(lineSeries.taskId, options.allTaskIds);
     const group = svgElement('g');
     group.setAttribute('aria-label', options.labels.get(lineSeries.taskId) ?? lineSeries.label);
     const sampleInterval = options.query?.intervalSeconds && options.query.intervalSeconds > 0
@@ -190,7 +192,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       value.className = 'chart-readout-item';
       const swatch = document.createElement('span');
       swatch.className = 'chart-readout-swatch';
-      swatch.style.backgroundColor = latencySeriesColor(entry.taskId, options.allTaskIds);
+      swatch.style.backgroundColor = options.colorAssignments.get(entry.taskId) ?? latencySeriesColor(entry.taskId, options.allTaskIds);
       swatch.setAttribute('aria-hidden', 'true');
       value.append(swatch, document.createTextNode(`${entry.label} ${entry.value.toFixed(1)}ms`));
       readout.append(separator, value);

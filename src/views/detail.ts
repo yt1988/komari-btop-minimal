@@ -1,6 +1,7 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState, PingTask } from '../domain';
 import { LATENCY_RANGES, latencySeriesColor } from '../latency';
+import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
 import { renderTrafficCell } from './traffic';
@@ -19,6 +20,8 @@ export type DetailOptions = {
   latencyState: 'loading' | 'ready' | 'error';
   latencyRange: number;
   visibleTaskIds: string[];
+  colorAssignments: LatencyColorAssignment;
+  overflowTaskIds: string[];
   handlers: DetailHandlers;
 };
 
@@ -180,7 +183,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     const button = element('button', `probe${options.visibleTaskIds.includes(taskId) ? ' active' : ''}`);
     button.type = 'button';
     const dot = element('span', 'probe-swatch');
-    dot.style.backgroundColor = latencySeriesColor(taskId, taskIds);
+    dot.style.backgroundColor = options.colorAssignments.get(taskId) ?? latencySeriesColor(taskId, taskIds);
     dot.setAttribute('aria-hidden', 'true');
     button.append(dot);
     const label = element('span');
@@ -212,13 +215,40 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   } else {
     renderLatencyChart(chart, {
       query: options.latency,
-      visibleTaskIds: options.visibleTaskIds.length ? options.visibleTaskIds : taskIds,
+      visibleTaskIds: options.visibleTaskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
       allTaskIds: taskIds,
+      colorAssignments: options.colorAssignments,
       labels: taskLabels,
       rangeHours: options.latencyRange,
     });
   }
   latencySection.append(chart);
+
+  const overflowIds = options.overflowTaskIds.filter((taskId) => options.visibleTaskIds.includes(taskId));
+  overflowIds.forEach((taskId) => {
+    const overflow = element('section', 'latency-overflow');
+    const heading = element('h3', 'latency-overflow-title');
+    heading.textContent = `${taskLabels.get(taskId) ?? taskId} latency`;
+    const overflowChart = element('div', 'chart-container latency-overflow-chart');
+    const overflowSeries = options.latency?.series.filter((series) => series.taskId === taskId) ?? [];
+    if (options.latencyState !== 'ready' || overflowSeries.length === 0) {
+      const empty = element('div', 'chart-message muted');
+      empty.textContent = options.latencyState === 'ready' ? 'no latency records' : 'latency unavailable';
+      overflowChart.append(empty);
+    } else {
+      renderLatencyChart(overflowChart, {
+        query: { ...options.latency!, series: overflowSeries },
+        visibleTaskIds: [taskId],
+        allTaskIds: [taskId],
+        colorAssignments: new Map([[taskId, latencySeriesColor(taskId)]]) as LatencyColorAssignment,
+        labels: taskLabels,
+        rangeHours: options.latencyRange,
+      });
+    }
+    overflow.append(heading, overflowChart);
+    latencySection.append(overflow);
+  });
+
   section.append(latencySection);
   container.replaceChildren(section);
 }

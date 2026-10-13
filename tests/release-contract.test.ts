@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 const manifest = JSON.parse(readFileSync(new URL('../komari-theme.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const releaseNote = readFileSync(new URL(`../docs/releases/v${packageJson.version}.md`, import.meta.url), 'utf8');
 
 describe('release contract', () => {
   it('keeps package metadata and the Komari manifest aligned', () => {
@@ -12,6 +13,12 @@ describe('release contract', () => {
       expect(manifest[field]).toEqual(expect.any(String));
       expect((manifest[field] as string).trim()).not.toBe('');
     }
+  });
+
+  it('requires a version-matched bilingual release note', () => {
+    expect(releaseNote).toContain(`# v${packageJson.version}`);
+    expect(releaseNote).toContain('## 中文');
+    expect(releaseNote).toContain('## English');
   });
 
   it('links safely to the canonical theme repository from the footer', () => {

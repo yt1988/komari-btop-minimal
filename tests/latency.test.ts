@@ -9,6 +9,15 @@ import {
   latencySeriesColor,
   toggleVisibleTasks,
 } from '../src/latency';
+import {
+  parseLatencyColorRegistry,
+  reconcileLatencyColors,
+  serializeLatencyColorRegistry,
+} from '../src/latencyColors';
+
+function assignLatencyColors(taskIds: readonly string[]) {
+  return reconcileLatencyColors(new Map(), 'test-node', taskIds);
+}
 
 describe('latency selection and segmentation', () => {
   it('exposes the six exact ranges with 24h as the default', () => {
@@ -38,14 +47,25 @@ describe('latency selection and segmentation', () => {
     expect(latencyCeiling([{ timestamp: 0, value: 201 }])).toBe(300);
   });
 
-  it('keeps target colors stable across range, filter, and response-order changes', () => {
-    const oneHourTaskIds = ['unicom', 'mobile', 'telecom'];
-    const thirtyDayTaskIds = ['telecom', 'unicom'];
+  it('assigns three unique stable colors without hash collisions', () => {
+    const registry = new Map();
+    const initial = reconcileLatencyColors(registry, 'node-a', ['1', '4', '7']);
     expect(LATENCY_SERIES_COLORS).toEqual(['#3987e5', '#7046c7', '#a35229']);
-    expect(latencySeriesColor('unicom', oneHourTaskIds)).toBe(latencySeriesColor('unicom', ['unicom']));
-    expect(latencySeriesColor('unicom', oneHourTaskIds)).toBe(latencySeriesColor('unicom', thirtyDayTaskIds));
-    expect(latencySeriesColor('mobile', oneHourTaskIds)).toBe(latencySeriesColor('mobile', ['new-task', 'mobile']));
-    expect(LATENCY_SERIES_COLORS).toContain(latencySeriesColor('series-only', []));
+    expect(new Set(initial.assignments.values()).size).toBe(3);
+    expect(reconcileLatencyColors(registry, 'node-a', ['7', '1', '4']).assignments).toEqual(initial.assignments);
+    expect(reconcileLatencyColors(registry, 'node-a', ['1', '7']).assignments.get('1')).toBe(initial.assignments.get('1'));
+  });
+
+  it('keeps overflow targets out of the comparison palette', () => {
+    const plan = assignLatencyColors(['1', '4', '7', 'extra']);
+    expect(plan.assignments).toHaveLength(3);
+    expect(plan.overflowTaskIds).toEqual(['extra']);
+  });
+
+  it('recovers safely from a corrupted persisted color registry', () => {
+    expect(parseLatencyColorRegistry('not a registry')).toEqual(new Map());
+    const registry = new Map([['node-a', new Map([['1', '#3987e5']])]]);
+    expect(parseLatencyColorRegistry(serializeLatencyColorRegistry(registry))).toEqual(registry);
   });
 
   it('starts a new path when a sample gap is too large', () => {

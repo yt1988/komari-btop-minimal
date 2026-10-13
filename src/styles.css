@@ -439,6 +439,23 @@ button {
   margin-top: 18px;
 }
 
+.latency-overflow {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid #0d3a20;
+}
+
+.latency-overflow-title {
+  margin: 0 0 10px;
+  color: #35f477;
+  font: inherit;
+  font-weight: 700;
+}
+
+.latency-overflow-chart .graph {
+  height: 180px;
+}
+
 .latency-heading {
   display: flex;
   flex-wrap: wrap;
