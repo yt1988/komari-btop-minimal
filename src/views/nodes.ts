@@ -159,13 +159,16 @@ export function renderNodeList(
   const emojiLabels: Record<string, string> = {
     '🏠': 'Home nodes',
     '🌐': 'Global nodes',
+    '🌍': 'Global nodes',
+    '🌎': 'Global nodes',
+    '🌏': 'Global nodes',
   };
+  const emojiOnly = (value: string): boolean => /^\p{Extended_Pictographic}(?:️|︎)?$/u.test(value);
   groups.forEach((group) => {
     const button = element('button', `filter${selectedGroup === group ? ' active' : ''}`);
     button.type = 'button';
-    const accessibleLabel = emojiLabels[group];
-    if (accessibleLabel) {
-      button.setAttribute('aria-label', accessibleLabel);
+    if (emojiOnly(group)) {
+      button.setAttribute('aria-label', emojiLabels[group] ?? 'Icon node group');
       const emoji = element('span', 'filter-emoji');
       emoji.textContent = group;
       emoji.setAttribute('aria-hidden', 'true');

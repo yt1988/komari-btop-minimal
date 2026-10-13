@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const trafficView = readFileSync(new URL('../src/views/traffic.ts', import.meta.url), 'utf8');
 const detailView = readFileSync(new URL('../src/views/detail.ts', import.meta.url), 'utf8');
+const nodesView = readFileSync(new URL('../src/views/nodes.ts', import.meta.url), 'utf8');
 const mobileStyles = styles.slice(styles.indexOf('@media (max-width: 1240px)'));
 const mediumStyles = styles.slice(
   styles.indexOf('@media (max-width: 1240px)'),
@@ -56,6 +57,9 @@ describe('narrow viewport layout', () => {
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?grid-template-rows:\s*13px\s+18px\s+15px;/);
     expect(mobileStyles).toMatch(/\.network\s*\{[\s\S]*?row-gap:\s*3px;/);
     expect(styles).not.toContain(".filter[aria-pressed='true']::after");
+    expect(nodesView).toContain('Extended_Pictographic');
+    expect(nodesView).toContain("'🌏': 'Global nodes'");
+    expect(nodesView).toContain("'Icon node group'");
     expect(styles).toMatch(/\.filter-emoji\s*\{[\s\S]*?opacity:\s*0\.42;[\s\S]*?filter:\s*brightness\(0\.7\)\s+saturate\(0\.6\);/);
     expect(styles).toMatch(/\.filter\[aria-pressed='true'\]\s+\.filter-emoji\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?filter:\s*none;/);
     expect(styles).toMatch(/\.theme-link\s*\{[\s\S]*?color:\s*inherit;[\s\S]*?text-decoration:\s*none;/);

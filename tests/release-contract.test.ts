@@ -18,7 +18,9 @@ describe('release contract', () => {
     expect(indexHtml).toContain(`href="${manifest.url}"`);
     expect(indexHtml).toContain('target="_blank"');
     expect(indexHtml).toContain('rel="noopener noreferrer"');
-    expect(indexHtml).toContain('Theme By Btop Minimal');
+    expect(indexHtml).toContain('Btop Minimal');
+    expect(indexHtml).not.toContain('Theme By');
+    expect(indexHtml).not.toContain('aria-hidden="true"> · </span>');
     expect(indexHtml).toContain('opens in a new tab');
   });
 
