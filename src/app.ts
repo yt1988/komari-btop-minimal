@@ -8,7 +8,7 @@ import {
 import type { LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
 import { reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
-import { toggleVisibleTasks } from './latency';
+import { resolveLatencyTargets, toggleVisibleTasks } from './latency';
 import {
   parseLatencyColorRegistry,
   reconcileLatencyColors,
@@ -86,16 +86,12 @@ function formatRefreshTime(timestamp: number | null): string {
   return `last update: ${parts.join('/')} ${formatTimestamp(timestamp)}`;
 }
 
+function latencyTargets(state: ApplicationState, uuid: string): Map<string, string> {
+  return resolveLatencyTargets(state.tasks, state.tasksReady, uuid, state.latency?.series ?? []);
+}
+
 function allTaskIds(state: ApplicationState, uuid: string): string[] {
-  const ids = state.tasks
-    .filter((task) => task.clients.includes(uuid))
-    .map((task) => task.id);
-  for (const series of state.latency?.series ?? []) {
-    if (!ids.includes(series.taskId)) {
-      ids.push(series.taskId);
-    }
-  }
-  return ids;
+  return [...latencyTargets(state, uuid).keys()];
 }
 
 export function startApp(root: HTMLElement): () => void {
@@ -266,7 +262,7 @@ export function startApp(root: HTMLElement): () => void {
     persistLatencyColors();
     renderDetailView(page, {
       node: getCurrentNode(),
-      tasks: state.tasks,
+      targets: latencyTargets(state, detailRoute.uuid),
       latency: state.latency,
       latencyState: state.latencyStatus,
       latencyRange: state.latencyRange,

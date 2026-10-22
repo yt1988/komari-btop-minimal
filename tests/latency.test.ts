@@ -7,6 +7,7 @@ import {
   formatLatencyReadout,
   latencyCeiling,
   latencySeriesColor,
+  resolveLatencyTargets,
   toggleVisibleTasks,
 } from '../src/latency';
 import {
@@ -127,3 +128,17 @@ describe('latency selection and segmentation', () => {
   });
 });
 
+
+describe('latency targets', () => {
+  const series = (taskId: string) => ({ taskId, label: taskId, points: [{ timestamp: 1, value: 10 }] });
+  const task = (id: string, name: string, clients: string[]) => ({ id, name, clients, defaultOn: false, type: 'icmp', interval: 60 });
+
+  it('hides history from tasks no longer assigned to the node', () => {
+    const tasks = [task('1', 'BJ.CU', []), task('2', 'BJ.CU.6', ['node'])];
+    expect([...resolveLatencyTargets(tasks, true, 'node', [series('1'), series('2')])]).toEqual([['2', 'BJ.CU.6']]);
+  });
+
+  it('falls back to returned series while the task list is unavailable', () => {
+    expect([...resolveLatencyTargets([], false, 'node', [series('1'), series('2')])]).toEqual([['1', '1'], ['2', '2']]);
+  });
+});

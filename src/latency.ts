@@ -1,4 +1,4 @@
-import type { LatencyPoint, LatencySeries } from './domain';
+import type { LatencyPoint, LatencySeries, PingTask } from './domain';
 
 export const LATENCY_RANGES = [
   { label: '1h', hours: 1 },
@@ -122,6 +122,31 @@ export function formatLatencyReadout(
     values.push(`${entry.label} ${entry.value.toFixed(1)}ms`);
   }
   return values.join(' · ');
+}
+
+/**
+ * Resolves the latency targets shown for a node, keyed by task ID with display
+ * labels. Once the ping task list is known it is authoritative, so history left
+ * behind by a task that was unassigned from the node is not shown. Only when the
+ * task list is unavailable are targets inferred from the returned series.
+ */
+export function resolveLatencyTargets(
+  tasks: readonly PingTask[],
+  tasksReady: boolean,
+  uuid: string,
+  series: readonly LatencySeries[],
+): Map<string, string> {
+  const targets = new Map(
+    tasks.filter((task) => task.clients.includes(uuid)).map((task) => [task.id, task.name]),
+  );
+  if (!tasksReady) {
+    for (const item of series) {
+      if (!targets.has(item.taskId)) {
+        targets.set(item.taskId, item.label);
+      }
+    }
+  }
+  return targets;
 }
 
 export function toggleVisibleTasks(
