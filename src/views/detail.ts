@@ -12,7 +12,6 @@ export type DetailHandlers = {
   onRangeChange: (hours: number) => void;
   onLatencyRetry: () => void;
   onTaskToggle: (taskId: string) => void;
-  onStatusToggle: () => void;
 };
 
 export type DetailOptions = {
@@ -103,8 +102,7 @@ function renderCore(container: HTMLElement, node: NodeState | null, view: Status
   const status = element('button');
   status.type = 'button';
   status.dataset.role = 'status';
-  status.setAttribute('aria-controls', 'status-history');
-  status.addEventListener('click', handlers.onStatusToggle);
+  status.setAttribute('aria-describedby', 'status-history');
   renderStatusButton(status, node, view);
   const panel = element('div', 'status-panel');
   panel.id = 'status-history';
@@ -145,16 +143,29 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null,
 }
 
 export function renderDetailView(container: HTMLElement, options: DetailOptions): void {
-  const section = element('section', 'detail');
-  const core = element('div', 'detail-core');
-  renderCore(core, options.node, options.status, options.handlers);
-  section.append(core);
+  // Periodic redraws keep the same node's core in place, so hovering or focusing
+  // the status (which reveals the outage list) survives them; only the rest is rebuilt.
+  const key = options.node?.metadata.uuid ?? '';
+  let section = container.querySelector<HTMLElement>(':scope > section.detail');
+  const existingCore = section?.querySelector<HTMLElement>(':scope > .detail-core') ?? null;
+  if (section && existingCore && existingCore.dataset.node === key) {
+    updateDetailCore(existingCore, options.node, options.status);
+    while (existingCore.nextSibling) {
+      existingCore.nextSibling.remove();
+    }
+  } else {
+    section = element('section', 'detail');
+    const core = element('div', 'detail-core');
+    core.dataset.node = key;
+    renderCore(core, options.node, options.status, options.handlers);
+    section.append(core);
+    container.replaceChildren(section);
+  }
 
   if (!options.node) {
     const missing = element('div', 'empty-state danger');
     missing.textContent = 'node not found';
     section.append(missing);
-    container.replaceChildren(section);
     return;
   }
 
@@ -257,6 +268,5 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   });
 
   section.append(latencySection);
-  container.replaceChildren(section);
 }
 

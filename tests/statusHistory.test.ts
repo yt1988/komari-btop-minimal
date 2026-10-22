@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseLoadRecordTimes } from '../src/api/komari';
 import { formatDayClock, formatDuration } from '../src/format';
-import { buildOutages, currentStateSince } from '../src/statusHistory';
+import { buildOutages } from '../src/statusHistory';
 
 const at = (time: string, day = 22): number => Date.parse(`2026-10-${day}T${time}:00Z`);
 
@@ -32,7 +32,6 @@ describe('outage history', () => {
       [at('07:19'), at('07:40')],
       [at('07:56'), at('08:19')],
     ]);
-    expect(currentStateSince(outages, true, input)).toEqual({ since: at('08:19'), atLeast: false });
   });
 
   it('uses five-minute records before that and ignores skipped downsampling buckets', () => {
@@ -42,14 +41,12 @@ describe('outage history', () => {
     const input = { fineTimes: every(1, at('02:25'), now), coarseTimes: coarse, now, online: true, lastReportAt: now, createdAt: old };
     const outages = buildOutages(input);
     expect(outages).toEqual([{ start: at('23:00', 21), end: at('23:30', 21), ongoing: false, startClipped: false }]);
-    expect(currentStateSince(outages, true, input)).toEqual({ since: at('23:30', 21), atLeast: false });
   });
 
   it('reports a node up for the whole window as at least 24h', () => {
     const input = { fineTimes: every(1, at('02:25'), now), coarseTimes: every(5, at('08:30', 21), now), now, online: true, lastReportAt: now, createdAt: old };
     const outages = buildOutages(input);
     expect(outages).toEqual([]);
-    expect(currentStateSince(outages, true, input)).toEqual({ since: at('08:25', 21), atLeast: true });
   });
 
   it('keeps an outage that began before the window', () => {
@@ -62,7 +59,6 @@ describe('outage history', () => {
     const input = { fineTimes: [], coarseTimes: [], now, online: false, lastReportAt: at('12:00', 19), createdAt: old };
     const outages = buildOutages(input);
     expect(outages).toEqual([{ start: at('12:00', 19), end: now, ongoing: true, startClipped: false }]);
-    expect(currentStateSince(outages, false, input)).toEqual({ since: at('12:00', 19), atLeast: false });
   });
 
   it('parses load record timestamps in order', () => {

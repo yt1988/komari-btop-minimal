@@ -17,7 +17,7 @@ import {
   type NodeLatencyColorRegistry,
 } from './latencyColors';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
-import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages, currentStateSince } from './statusHistory';
+import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages } from './statusHistory';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
 import type { StatusView } from './views/status';
@@ -45,7 +45,6 @@ type ApplicationState = {
   visibleTaskIds: string[] | null;
   statusFine: number[] | null;
   statusCoarse: number[] | null;
-  statusOpen: boolean;
 };
 
 let nodeMetadataCache: NodeMetadata[] | null = null;
@@ -135,7 +134,6 @@ export function startApp(root: HTMLElement): () => void {
     visibleTaskIds: null,
     statusFine: null,
     statusCoarse: null,
-    statusOpen: false,
   };
   let statusController: AbortController | null = null;
   let statusRequestId = 0;
@@ -192,14 +190,8 @@ export function startApp(root: HTMLElement): () => void {
       createdAt: node?.metadata.createdAt ?? null,
     };
     const outages = node && state.statusCoarse !== null ? buildOutages(input) : null;
-    if (outages?.length === 0) {
-      // Without outages the status is plain text, so drop any stale open state.
-      state.statusOpen = false;
-    }
     return {
-      open: state.statusOpen,
       outages,
-      since: node && outages ? currentStateSince(outages, node.online, input) : null,
       now,
     };
   };
@@ -256,28 +248,6 @@ export function startApp(root: HTMLElement): () => void {
         statusController = null;
       }
     });
-  };
-
-  const setStatusOpen = (open: boolean): void => {
-    if (state.statusOpen === open) {
-      return;
-    }
-    state.statusOpen = open;
-    updateCore();
-  };
-
-  const handleStatusKey = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && state.statusOpen) {
-      setStatusOpen(false);
-      page.querySelector<HTMLButtonElement>('[data-role="status"]')?.focus();
-    }
-  };
-
-  const handleStatusPointer = (event: PointerEvent): void => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (state.statusOpen && !target?.closest('[data-role="status"], [data-role="status-panel"]')) {
-      setStatusOpen(false);
-    }
   };
 
   const updateTimestamp = (): void => {
@@ -404,9 +374,6 @@ export function startApp(root: HTMLElement): () => void {
           state.visibleTaskIds = toggleVisibleTasks(currentIds, currentVisible, taskId);
           render();
         },
-        onStatusToggle: () => {
-          setStatusOpen(!state.statusOpen);
-        },
       },
     });
   };
@@ -471,7 +438,6 @@ export function startApp(root: HTMLElement): () => void {
     statusController = null;
     state.statusFine = null;
     state.statusCoarse = null;
-    state.statusOpen = false;
     if (route.type === 'detail') {
       loadStatusRecords(route.uuid);
     }
@@ -610,8 +576,6 @@ export function startApp(root: HTMLElement): () => void {
 
   window.addEventListener('popstate', handleRouteChange);
   window.addEventListener('hashchange', handleRouteChange);
-  document.addEventListener('keydown', handleStatusKey);
-  document.addEventListener('pointerdown', handleStatusPointer);
   void loadSiteName();
   void refreshMetadata();
   liveSocket = createLiveSocket({
@@ -643,8 +607,6 @@ export function startApp(root: HTMLElement): () => void {
     statusController?.abort();
     metadataController?.abort();
     liveSocket?.stop();
-    document.removeEventListener('keydown', handleStatusKey);
-    document.removeEventListener('pointerdown', handleStatusPointer);
     if (refreshTimer !== null) {
       clearInterval(refreshTimer);
     }

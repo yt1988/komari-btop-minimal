@@ -387,7 +387,7 @@ button {
 }
 
 .detail-control {
-  flex-wrap: wrap;
+  position: relative;
   margin: 0;
 }
 
@@ -407,10 +407,6 @@ button {
   background: none;
   font-size: 14px;
   line-height: 18px;
-  cursor: pointer;
-}
-
-.detail-status:disabled {
   cursor: default;
 }
 
@@ -419,20 +415,27 @@ button {
   outline-offset: 3px;
 }
 
+/* Floats under the status on hover or focus without moving the page; the top
+   padding bridges the pointer from the status into the list. */
 .status-panel {
-  display: grid;
-  flex: 0 0 100%;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 2;
+  display: none;
   grid-template-columns: repeat(2, auto);
-  justify-content: end;
   gap: 2px 2ch;
-  margin-top: 8px;
+  padding: 8px 0 6px 2ch;
+  background: #030805;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
-.status-panel[hidden] {
-  display: none;
+.detail-status:hover + .status-panel:not(:empty),
+.detail-status:focus + .status-panel:not(:empty),
+.status-panel:not(:empty):hover {
+  display: grid;
 }
 
 .status-more {

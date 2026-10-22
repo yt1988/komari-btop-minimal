@@ -1,12 +1,10 @@
 import type { NodeState } from '../domain';
 import { formatDayClock, formatDuration } from '../format';
-import type { OfflineInterval, StateSince } from '../statusHistory';
+import type { OfflineInterval } from '../statusHistory';
 
 export type StatusView = {
-  open: boolean;
   /** Oldest first; null until loaded. */
   outages: OfflineInterval[] | null;
-  since: StateSince | null;
   now: number;
 };
 
@@ -19,26 +17,19 @@ function span(className: string, text: string): HTMLSpanElement {
   return node;
 }
 
-/** The status only opens a list when the last 24h had an outage. */
-export function hasOutages(view: StatusView): boolean {
-  return (view.outages?.length ?? 0) > 0;
-}
-
 export function renderStatusButton(button: HTMLButtonElement, node: NodeState | null, view: StatusView): void {
   button.className = `detail-status ${node?.online ? 'ok' : 'danger'}`;
-  button.disabled = !hasOutages(view);
-  if (button.disabled) {
-    button.removeAttribute('aria-expanded');
-  } else {
-    button.setAttribute('aria-expanded', String(view.open));
-  }
+  // Hovering or focusing the status reveals the outage list; without one it is plain text.
+  button.disabled = (view.outages?.length ?? 0) === 0;
   button.hidden = node === null;
   if (!node) {
     button.replaceChildren();
     return;
   }
   const label = node.online ? '● online' : '○ offline';
-  const since = view.since === null ? '' : ` ${formatDuration(view.now - view.since.since)}${view.since.atLeast ? '+' : ''}`;
+  // Only an outage shows how long it has lasted, and only when its start is known.
+  const outage = node.online ? undefined : view.outages?.find((interval) => interval.ongoing && !interval.startClipped);
+  const since = outage ? ` ${formatDuration(view.now - outage.start)}` : '';
   if (button.textContent === `${label}${since}`) {
     return;
   }
@@ -65,13 +56,9 @@ function rows(outages: readonly OfflineInterval[], now: number): HTMLElement[] {
   return cells;
 }
 
-/** Rebuilds the list only when its visible content changed. */
+/** Rebuilds the list only when its visible content changed; it stays empty without outages. */
 export function renderStatusPanel(panel: HTMLElement, view: StatusView): void {
-  panel.hidden = !(view.open && hasOutages(view));
-  if (panel.hidden || !view.outages) {
-    return;
-  }
-  const next = rows(view.outages, view.now);
+  const next = view.outages ? rows(view.outages, view.now) : [];
   const signature = next.map((part) => `${part.className}|${part.textContent}`).join('/');
   if (panel.dataset.signature === signature) {
     return;

@@ -65,38 +65,3 @@ export function buildOutages(input: StatusHistoryInput): OfflineInterval[] {
   }
   return intervals;
 }
-
-export type StateSince = {
-  since: number;
-  /** The state began before the 24h window, so `since` is a lower bound. */
-  atLeast: boolean;
-};
-
-/**
- * Start of the current state from report data alone: the ongoing outage start
- * when offline, otherwise the last recovery, otherwise the first record.
- */
-export function currentStateSince(
-  outages: readonly OfflineInterval[],
-  online: boolean,
-  input: Pick<StatusHistoryInput, 'fineTimes' | 'coarseTimes' | 'now' | 'createdAt'>,
-): StateSince | null {
-  if (!online) {
-    const ongoing = outages.find((interval) => interval.ongoing);
-    return ongoing ? { since: ongoing.start, atLeast: ongoing.startClipped } : null;
-  }
-  const recovered = outages.at(-1);
-  if (recovered) {
-    return { since: recovered.end, atLeast: false };
-  }
-  const windowStart = input.now - STATUS_HISTORY_HOURS * 3_600_000;
-  const first = Math.min(...[...(input.coarseTimes ?? []), ...(input.fineTimes ?? [])].filter((time) => time >= windowStart));
-  if (!Number.isFinite(first)) {
-    return null;
-  }
-  // A leading gap would already be an outage, so only a node created inside
-  // the window has a known start; otherwise it has been up the whole window.
-  return input.createdAt !== null && input.createdAt > windowStart
-    ? { since: first, atLeast: false }
-    : { since: windowStart, atLeast: true };
-}
