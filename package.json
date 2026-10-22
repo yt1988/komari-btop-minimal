@@ -1,7 +1,7 @@
 {
   "name": "komari-btop-minimal",
   "private": true,
-  "version": "1.5.9",
+  "version": "1.6.0",
   "type": "module",
   "license": "MIT",
   "packageManager": "npm@11.17.0",
