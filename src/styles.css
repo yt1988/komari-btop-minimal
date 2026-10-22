@@ -519,20 +519,31 @@ button {
 }
 
 .graph-wrap {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  gap: 10px;
+  padding-left: 58px;
+}
+
+.graph-plot {
+  position: relative;
 }
 
 .axis-y {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 0 0 20px;
+  position: absolute;
+  top: 0;
+  right: calc(100% + 10px);
+  bottom: 0;
+  width: 48px;
   color: #178e48;
   font-size: 11px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.axis-y span {
+  position: absolute;
+  right: 0;
+  line-height: 1;
+  transform: translateY(-50%);
+  white-space: nowrap;
 }
 
 .graph-area {
@@ -569,11 +580,19 @@ button {
   vector-effect: non-scaling-stroke;
 }
 
+.latency-dot,
 .point {
-  fill: #35f477;
-  stroke: #030805;
-  stroke-width: 1;
+  fill: none;
+  stroke-linecap: round;
   vector-effect: non-scaling-stroke;
+}
+
+.latency-dot {
+  stroke-width: 5;
+}
+
+.point {
+  stroke-width: 7;
 }
 
 .axis-x {

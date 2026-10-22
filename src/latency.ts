@@ -184,7 +184,25 @@ export function latencyCeiling(seriesOrPoints: LatencySeries[] | LatencyPoint[])
       ? Math.max(current, point.value)
       : current;
   }, 0);
-  return Math.max(300, Math.ceil(maximum / 100) * 100);
+  const rough = Math.max(300, Math.ceil(maximum / 100) * 100);
+  const step = latencyTickStep(rough);
+  return Math.ceil(rough / step) * step;
+}
+
+const LATENCY_TICK_STEPS = [100, 200, 250, 500, 1000, 2000, 2500, 5000] as const;
+
+function latencyTickStep(ceiling: number): number {
+  return LATENCY_TICK_STEPS.find((step) => ceiling / step <= 5) ?? Math.ceil(ceiling / 5 / 1000) * 1000;
+}
+
+/** Evenly spaced axis values from 0 to a ceiling produced by `latencyCeiling`. */
+export function latencyTicks(ceiling: number): number[] {
+  const step = latencyTickStep(ceiling);
+  const ticks: number[] = [];
+  for (let value = 0; value <= ceiling; value += step) {
+    ticks.push(value);
+  }
+  return ticks;
 }
 
 function validPoint(point: LatencyPoint): point is LatencyPoint & { value: number } {
@@ -211,6 +229,8 @@ export function buildLatencySegments(points: LatencyPoint[], sampleIntervalMs: n
 /**
  * Returns point runs that may safely be drawn as a single SVG path. Missing,
  * invalid, duplicate, and over-large time gaps deliberately start a new run.
+ * A run may hold a single isolated sample, which is drawn as a dot so that no
+ * recorded value is invisible.
  */
 export function buildLatencyRuns(
   points: LatencyPoint[],
@@ -225,7 +245,7 @@ export function buildLatencyRuns(
 
   for (const point of sorted) {
     if (!validPoint(point)) {
-      if (run.length > 1) {
+      if (run.length > 0) {
         runs.push(run);
       }
       run = [];
@@ -233,14 +253,14 @@ export function buildLatencyRuns(
     }
     const previous = run.at(-1);
     if (previous && (point.timestamp <= previous.timestamp || point.timestamp - previous.timestamp > maxGap)) {
-      if (run.length > 1) {
+      if (run.length > 0) {
         runs.push(run);
       }
       run = [];
     }
     run.push(point);
   }
-  if (run.length > 1) {
+  if (run.length > 0) {
     runs.push(run);
   }
   return runs;

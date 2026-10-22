@@ -6,6 +6,7 @@ import {
   buildLatencySegments,
   formatLatencyReadout,
   latencyCeiling,
+  latencyTicks,
   latencySeriesColor,
   resolveLatencyTargets,
   toggleVisibleTasks,
@@ -140,5 +141,24 @@ describe('latency targets', () => {
 
   it('falls back to returned series while the task list is unavailable', () => {
     expect([...resolveLatencyTargets([], false, 'node', [series('1'), series('2')])]).toEqual([['1', '1'], ['2', '2']]);
+  });
+});
+
+describe('latency chart visibility', () => {
+  it('keeps an isolated sample as its own drawable run', () => {
+    const fiveMinutes = 300_000;
+    const runs = buildLatencyRuns([
+      { timestamp: 0, value: 181 },
+      { timestamp: 6 * fiveMinutes, value: 248 },
+      { timestamp: 7 * fiveMinutes, value: 305 },
+    ], fiveMinutes);
+    expect(runs.map((run) => run.map((point) => point.value))).toEqual([[181], [248, 305]]);
+  });
+
+  it('labels the axis with evenly spaced ticks that end at the ceiling', () => {
+    expect(latencyTicks(latencyCeiling([{ timestamp: 0, value: 120 }]))).toEqual([0, 100, 200, 300]);
+    expect(latencyTicks(latencyCeiling([{ timestamp: 0, value: 311 }]))).toEqual([0, 100, 200, 300, 400]);
+    expect(latencyCeiling([{ timestamp: 0, value: 650 }])).toBe(800);
+    expect(latencyTicks(800)).toEqual([0, 200, 400, 600, 800]);
   });
 });

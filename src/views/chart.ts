@@ -3,6 +3,7 @@ import {
   buildLatencyRuns,
   formatLatencyTimestamp,
   latencyCeiling,
+  latencyTicks,
   latencyReadoutEntries,
   latencySeriesColor,
 } from '../latency';
@@ -57,19 +58,24 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   const end = options.query?.end || latest;
   const timeSpan = Math.max(1, end - start);
   const ceiling = latencyCeiling(points);
+  const ticks = latencyTicks(ceiling);
+  const toX = (timestamp: number): number => (timestamp - start) / timeSpan * 1000;
+  const toY = (value: number): number => 280 - Math.min(ceiling, value) / ceiling * 280;
   const stage = document.createElement('div');
   stage.className = 'graph-wrap';
-  const axis = document.createElement('div');
-  axis.className = 'axis-y';
-  [ceiling, 200, 100, 0].forEach((value) => {
-    const label = document.createElement('span');
-    label.textContent = value === 0 ? '0' : `${value}ms`;
-    axis.append(label);
-  });
-  stage.append(axis);
 
   const graphArea = document.createElement('div');
   graphArea.className = 'graph-area';
+  const plot = document.createElement('div');
+  plot.className = 'graph-plot';
+  const axis = document.createElement('div');
+  axis.className = 'axis-y';
+  ticks.forEach((value) => {
+    const label = document.createElement('span');
+    label.textContent = value === 0 ? '0' : `${value}ms`;
+    label.style.top = `${toY(value) / 280 * 100}%`;
+    axis.append(label);
+  });
   const graph = svgElement('svg');
   graph.classList.add('graph');
   graph.setAttribute('viewBox', '0 0 1000 280');
@@ -82,9 +88,9 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
 
   const grid = svgElement('g');
   grid.classList.add('graph-grid');
-  [0, 100, 200, ceiling].forEach((value) => {
+  ticks.forEach((value) => {
     const line = svgElement('line');
-    const y = 280 - Math.min(ceiling, value) / ceiling * 280;
+    const y = toY(value);
     line.setAttribute('x1', '0');
     line.setAttribute('x2', '1000');
     line.setAttribute('y1', String(y));
@@ -102,7 +108,10 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   crosshair.style.visibility = 'hidden';
   graph.append(crosshair);
 
-  const markers = new Map<string, SVGCircleElement>();
+  // The SVG stretches non-uniformly, so dots are zero-length round-capped paths
+  // with non-scaling strokes rather than circles, which would render as ellipses.
+  const dotPath = (x: number, y: number): string => `M ${x.toFixed(3)} ${y.toFixed(3)} l 0 0`;
+  const markers = new Map<string, SVGPathElement>();
   series.forEach((lineSeries) => {
     const color = options.colorAssignments.get(lineSeries.taskId) ?? latencySeriesColor(lineSeries.taskId, options.allTaskIds);
     const group = svgElement('g');
@@ -116,24 +125,29 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
         continue;
       }
       const path = svgElement('path');
-      path.classList.add('latency-segment');
       path.style.stroke = color;
-      const commands = [`M ${((first.timestamp - start) / timeSpan * 1000).toFixed(3)} ${(280 - first.value / ceiling * 280).toFixed(3)}`];
-      for (const point of run.slice(1)) {
-        commands.push(`L ${((point.timestamp - start) / timeSpan * 1000).toFixed(3)} ${(280 - point.value / ceiling * 280).toFixed(3)}`);
+      if (run.length === 1) {
+        path.classList.add('latency-dot');
+        path.setAttribute('d', dotPath(toX(first.timestamp), toY(first.value)));
+      } else {
+        path.classList.add('latency-segment');
+        const commands = [`M ${toX(first.timestamp).toFixed(3)} ${toY(first.value).toFixed(3)}`];
+        for (const point of run.slice(1)) {
+          commands.push(`L ${toX(point.timestamp).toFixed(3)} ${toY(point.value).toFixed(3)}`);
+        }
+        path.setAttribute('d', commands.join(' '));
       }
-      path.setAttribute('d', commands.join(' '));
       group.append(path);
     }
-    const marker = svgElement('circle');
+    const marker = svgElement('path');
     marker.classList.add('point');
-    marker.style.fill = color;
-    marker.setAttribute('r', '3');
+    marker.style.stroke = color;
     marker.style.visibility = 'hidden';
     graph.append(group, marker);
     markers.set(lineSeries.taskId, marker);
   });
-  graphArea.append(graph);
+  plot.append(axis, graph);
+  graphArea.append(plot);
 
   const xAxis = document.createElement('div');
   xAxis.className = 'axis-x';
@@ -177,8 +191,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
         marker.style.visibility = 'hidden';
         return;
       }
-      marker.setAttribute('cx', String((point.timestamp - start) / timeSpan * 1000));
-      marker.setAttribute('cy', String(280 - point.value / ceiling * 280));
+      marker.setAttribute('d', dotPath(toX(point.timestamp), toY(point.value)));
       marker.style.visibility = 'visible';
     });
     readout.replaceChildren();
