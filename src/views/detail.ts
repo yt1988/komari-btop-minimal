@@ -1,5 +1,5 @@
 import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
-import type { LatencyQuery, NodeState, PingTask } from '../domain';
+import type { LatencyQuery, NodeState } from '../domain';
 import { LATENCY_RANGES, latencySeriesColor } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
@@ -15,7 +15,7 @@ export type DetailHandlers = {
 
 export type DetailOptions = {
   node: NodeState | null;
-  tasks: PingTask[];
+  targets: ReadonlyMap<string, string>;
   latency: LatencyQuery | null;
   latencyState: 'loading' | 'ready' | 'error';
   latencyRange: number;
@@ -147,13 +147,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     return;
   }
 
-  const assignedTasks = options.tasks.filter((task) => task.clients.includes(options.node!.metadata.uuid));
-  const taskLabels = new Map(assignedTasks.map((task) => [task.id, task.name]));
-  for (const series of options.latency?.series ?? []) {
-    if (!taskLabels.has(series.taskId)) {
-      taskLabels.set(series.taskId, series.label);
-    }
-  }
+  const taskLabels = new Map(options.targets);
   const taskIds = [...taskLabels.keys()];
 
   const latencySection = element('section', 'latency');
