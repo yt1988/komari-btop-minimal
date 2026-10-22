@@ -107,6 +107,31 @@ export function networkTone(bytesPerSecond: number | null | undefined): MetricTo
     : 'normal';
 }
 
+/** Compact duration: `47m`, `1h5m`, `2d3h`. */
+export function formatDuration(milliseconds: number | null | undefined): string {
+  const safeValue = finiteNonNegative(milliseconds);
+  if (safeValue === null) {
+    return '--';
+  }
+  const minutes = Math.max(1, Math.round(safeValue / 60_000));
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const rest = minutes % 60;
+    return rest === 0 ? `${hours}h` : `${hours}h${rest}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  return rest === 0 ? `${days}d` : `${days}d${rest}h`;
+}
+
+/** Wall-clock `HH:MM`. */
+export function formatClock(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 export function formatTimestamp(timestamp: number | null | undefined): string {
   if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
     return '--:--:--';

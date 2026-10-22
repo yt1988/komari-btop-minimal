@@ -85,6 +85,7 @@ describe('Komari response normalization', () => {
           ram: { total: 100, used: 25 },
           disk: { total: 200, used: 50 },
           network: { up: 10, down: 20, totalUp: 1000, totalDown: 2000 },
+          uptimeSeconds: null,
           updatedAt: Date.parse('2026-10-11T01:02:03Z'),
         },
       },

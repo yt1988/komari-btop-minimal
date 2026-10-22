@@ -8,6 +8,7 @@ import {
   latencySeriesColor,
 } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
+import type { OfflineInterval } from '../statusHistory';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
@@ -38,6 +39,7 @@ export type LatencyChartOptions = {
   colorAssignments: LatencyColorAssignment;
   labels: Map<string, string>;
   rangeHours: number;
+  offline?: readonly OfflineInterval[];
 };
 
 export function renderLatencyChart(container: HTMLElement, options: LatencyChartOptions): void {
@@ -98,6 +100,18 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     grid.append(line);
   });
   graph.append(grid);
+
+  const offline = (options.offline ?? []).filter((interval) => interval.end > start && interval.start < end);
+  for (const interval of offline) {
+    const band = svgElement('rect');
+    band.classList.add('offline-band');
+    const x = toX(Math.max(start, interval.start));
+    band.setAttribute('x', x.toFixed(3));
+    band.setAttribute('y', '0');
+    band.setAttribute('width', Math.max(1, toX(Math.min(end, interval.end)) - x).toFixed(3));
+    band.setAttribute('height', '280');
+    graph.append(band);
+  }
 
   const crosshair = svgElement('line');
   crosshair.classList.add('cross');
@@ -199,6 +213,12 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     timestampLabel.className = 'chart-readout-time';
     timestampLabel.textContent = formatLatencyTimestamp(timestamp, options.rangeHours);
     readout.append(timestampLabel);
+    if (offline.some((interval) => timestamp >= interval.start && timestamp <= interval.end)) {
+      const down = document.createElement('span');
+      down.className = 'danger';
+      down.textContent = 'down';
+      readout.append(document.createTextNode(' · '), down);
+    }
     entries.forEach((entry) => {
       const separator = document.createTextNode(' · ');
       const value = document.createElement('span');

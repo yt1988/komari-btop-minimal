@@ -166,8 +166,19 @@ function parseLiveReport(raw: unknown): LiveReport {
     ram: resource(ram),
     disk: resource(disk),
     network: networkValue,
+    uptimeSeconds: asNullableNumber(report.uptime),
     updatedAt: parseTimestamp(report.updated_at),
   };
+}
+
+/** Timestamps of the per-node load records; gaps between them mark outages. */
+export function parseLoadRecordTimes(raw: unknown): number[] {
+  const data = asObject(unwrapStandardResponse(raw, '/api/records/load'), '/api/records/load');
+  const records = Array.isArray(data.records) ? data.records : [];
+  return records
+    .map((record) => (isObject(record) ? parseTimestamp(record.time) : null))
+    .filter((timestamp): timestamp is number => timestamp !== null)
+    .sort((left, right) => left - right);
 }
 
 export function parseLiveSnapshot(raw: unknown): LiveSnapshot {
@@ -236,6 +247,11 @@ export async function fetchPublicSettings(signal?: AbortSignal): Promise<PublicS
 
 export async function fetchPingTasks(signal?: AbortSignal): Promise<PingTask[]> {
   return parsePingTasks(await fetchJson('/api/task/ping', { signal }));
+}
+
+export async function fetchLoadRecordTimes(uuid: string, hours: number, signal?: AbortSignal): Promise<number[]> {
+  const query = new URLSearchParams({ uuid, hours: String(hours) });
+  return parseLoadRecordTimes(await fetchJson(`/api/records/load?${query}`, { signal }));
 }
 
 export async function fetchLatency(uuid: string, hours: number, signal?: AbortSignal): Promise<LatencyQuery> {

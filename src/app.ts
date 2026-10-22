@@ -1,6 +1,7 @@
 import {
   createLiveSocket,
   fetchLatency,
+  fetchLoadRecordTimes,
   fetchNodeMetadata,
   fetchPingTasks,
   fetchPublicSettings,
@@ -16,8 +17,10 @@ import {
   type NodeLatencyColorRegistry,
 } from './latencyColors';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
+import { STATUS_HISTORY_HOURS, buildStatusHistory, currentStateSince } from './statusHistory';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
+import type { StatusView } from './views/status';
 
 type LatencyStatus = 'loading' | 'ready' | 'error';
 type LiveConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'stopped';
@@ -40,6 +43,9 @@ type ApplicationState = {
   latency: LatencyQuery | null;
   latencyStatus: LatencyStatus;
   visibleTaskIds: string[] | null;
+  statusRecords: number[] | null;
+  statusStatus: LatencyStatus;
+  statusOpen: boolean;
 };
 
 let nodeMetadataCache: NodeMetadata[] | null = null;
@@ -126,7 +132,13 @@ export function startApp(root: HTMLElement): () => void {
     latency: null,
     latencyStatus: 'loading',
     visibleTaskIds: null,
+    statusRecords: null,
+    statusStatus: 'loading',
+    statusOpen: false,
   };
+  let statusController: AbortController | null = null;
+  let statusRequestId = 0;
+  let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let latencyController: AbortController | null = null;
   let latencyRequestId = 0;
   let latencyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -165,6 +177,104 @@ export function startApp(root: HTMLElement): () => void {
       return null;
     }
     return getNodeStates().find((node) => node.metadata.uuid === route.uuid) ?? null;
+  };
+
+  const getStatusView = (node: NodeState | null): StatusView => {
+    const now = Date.now();
+    const uptimeSeconds = node?.report?.uptimeSeconds ?? null;
+    const history = node && state.statusRecords !== null
+      ? buildStatusHistory({
+        recordTimes: state.statusRecords,
+        now,
+        online: node.online,
+        lastReportAt: node.lastReportAt,
+        uptimeSeconds,
+      })
+      : null;
+    return {
+      open: state.statusOpen,
+      state: state.statusStatus,
+      history,
+      since: node ? currentStateSince(history, node.online, node.lastReportAt, uptimeSeconds, now) : null,
+      now,
+    };
+  };
+
+  const updateCore = (): void => {
+    const core = page.querySelector<HTMLElement>('.detail-core');
+    if (core && state.route.type === 'detail') {
+      const node = getCurrentNode();
+      updateDetailCore(core, node, getStatusView(node), retryStatus);
+    }
+  };
+
+  const clearStatusRefresh = (): void => {
+    if (statusRefreshTimer !== null) {
+      clearTimeout(statusRefreshTimer);
+      statusRefreshTimer = null;
+    }
+  };
+
+  /** Loads the per-minute records behind the status history and chart offline bands. */
+  const loadStatusRecords = (uuid: string): void => {
+    clearStatusRefresh();
+    statusController?.abort();
+    const requestId = ++statusRequestId;
+    const controller = new AbortController();
+    statusController = controller;
+    void fetchLoadRecordTimes(uuid, STATUS_HISTORY_HOURS, controller.signal).then((times) => {
+      if (stopped || requestId !== statusRequestId || state.route.type !== 'detail' || state.route.uuid !== uuid) {
+        return;
+      }
+      state.statusRecords = times;
+      state.statusStatus = 'ready';
+      render();
+      statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 120_000);
+    }).catch((error: unknown) => {
+      const aborted = error instanceof DOMException && error.name === 'AbortError';
+      if (stopped || requestId !== statusRequestId || aborted) {
+        return;
+      }
+      if (state.statusRecords === null) {
+        state.statusStatus = 'error';
+        updateCore();
+      }
+      statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 60_000);
+    }).finally(() => {
+      if (statusController === controller) {
+        statusController = null;
+      }
+    });
+  };
+
+  const retryStatus = (): void => {
+    if (state.route.type === 'detail') {
+      state.statusStatus = 'loading';
+      updateCore();
+      loadStatusRecords(state.route.uuid);
+    }
+  };
+
+  const setStatusOpen = (open: boolean): void => {
+    if (state.statusOpen === open) {
+      return;
+    }
+    state.statusOpen = open;
+    updateCore();
+  };
+
+  const handleStatusKey = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && state.statusOpen) {
+      setStatusOpen(false);
+      page.querySelector<HTMLButtonElement>('[data-role="status"]')?.focus();
+    }
+  };
+
+  const handleStatusPointer = (event: PointerEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (state.statusOpen && !target?.closest('[data-role="status"], [data-role="status-panel"]')) {
+      setStatusOpen(false);
+    }
   };
 
   const updateTimestamp = (): void => {
@@ -260,8 +370,10 @@ export function startApp(root: HTMLElement): () => void {
     const detailRoute = state.route;
     const colorPlan = reconcileLatencyColors(latencyColorRegistry, detailRoute.uuid, ids);
     persistLatencyColors();
+    const node = getCurrentNode();
     renderDetailView(page, {
-      node: getCurrentNode(),
+      node,
+      status: getStatusView(node),
       targets: latencyTargets(state, detailRoute.uuid),
       latency: state.latency,
       latencyState: state.latencyStatus,
@@ -289,6 +401,10 @@ export function startApp(root: HTMLElement): () => void {
           state.visibleTaskIds = toggleVisibleTasks(currentIds, currentVisible, taskId);
           render();
         },
+        onStatusToggle: () => {
+          setStatusOpen(!state.statusOpen);
+        },
+        onStatusRetry: retryStatus,
       },
     });
   };
@@ -348,6 +464,15 @@ export function startApp(root: HTMLElement): () => void {
     state.latencyRange = 24;
     state.latencyStatus = 'loading';
     state.visibleTaskIds = null;
+    clearStatusRefresh();
+    statusController?.abort();
+    statusController = null;
+    state.statusRecords = null;
+    state.statusStatus = 'loading';
+    state.statusOpen = false;
+    if (route.type === 'detail') {
+      loadStatusRecords(route.uuid);
+    }
     if (route.type === 'detail' && state.metadataReady && state.nodes.some((node) => node.uuid === route.uuid)) {
       void ensurePingTasks();
       loadLatency(route.uuid, state.latencyRange);
@@ -459,10 +584,15 @@ export function startApp(root: HTMLElement): () => void {
       if (!reconciled.changedUuids.has(state.route.uuid)) {
         return;
       }
-      const core = page.querySelector<HTMLElement>('.detail-core');
-      if (core) {
-        updateDetailCore(core, getCurrentNode());
+      if (hadSnapshot && reconciled.onlineChangedUuids.has(state.route.uuid)) {
+        // Redraw the chart's offline bands now; records catch up a minute later.
+        render();
+        const uuid = state.route.uuid;
+        clearStatusRefresh();
+        statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 75_000);
+        return;
       }
+      updateCore();
     } else if (state.metadataReady) {
       updateNodeRows(page, getNodeStates(), nodeHandlers, reconciled.changedUuids);
     }
@@ -478,6 +608,8 @@ export function startApp(root: HTMLElement): () => void {
 
   window.addEventListener('popstate', handleRouteChange);
   window.addEventListener('hashchange', handleRouteChange);
+  document.addEventListener('keydown', handleStatusKey);
+  document.addEventListener('pointerdown', handleStatusPointer);
   void loadSiteName();
   void refreshMetadata();
   liveSocket = createLiveSocket({
@@ -485,10 +617,17 @@ export function startApp(root: HTMLElement): () => void {
     onSnapshot: applySnapshot,
     onStatusChange: updateLiveConnection,
   });
-  refreshTimer = setInterval(() => liveSocket?.request(), 3000);
+  refreshTimer = setInterval(() => {
+    liveSocket?.request();
+    // An offline node sends no reports, so keep its outage duration ticking.
+    if (state.route.type === 'detail' && !state.online.has(state.route.uuid)) {
+      updateCore();
+    }
+  }, 3000);
   metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
   if (state.route.type === 'detail') {
     state.routeKey = routeKey(state.route);
+    loadStatusRecords(state.route.uuid);
   } else {
     state.routeKey = 'nodes';
     render();
@@ -497,9 +636,13 @@ export function startApp(root: HTMLElement): () => void {
   return () => {
     stopped = true;
     clearLatencyRefresh();
+    clearStatusRefresh();
     latencyController?.abort();
+    statusController?.abort();
     metadataController?.abort();
     liveSocket?.stop();
+    document.removeEventListener('keydown', handleStatusKey);
+    document.removeEventListener('pointerdown', handleStatusPointer);
     if (refreshTimer !== null) {
       clearInterval(refreshTimer);
     }

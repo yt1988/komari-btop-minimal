@@ -4,6 +4,7 @@ import { LATENCY_RANGES, latencySeriesColor } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
+import { renderStatusButton, renderStatusPanel, type StatusView } from './status';
 import { renderTrafficCell } from './traffic';
 
 export type DetailHandlers = {
@@ -11,10 +12,13 @@ export type DetailHandlers = {
   onRangeChange: (hours: number) => void;
   onLatencyRetry: () => void;
   onTaskToggle: (taskId: string) => void;
+  onStatusToggle: () => void;
+  onStatusRetry: () => void;
 };
 
 export type DetailOptions = {
   node: NodeState | null;
+  status: StatusView;
   targets: ReadonlyMap<string, string>;
   latency: LatencyQuery | null;
   latencyState: 'loading' | 'ready' | 'error';
@@ -91,16 +95,24 @@ function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
   container.replaceChildren(row);
 }
 
-function renderCore(container: HTMLElement, node: NodeState | null): void {
+function renderCore(container: HTMLElement, node: NodeState | null, view: StatusView, handlers: DetailHandlers): void {
   const control = element('div', 'detail-control');
   const back = element('button', 'back');
   back.type = 'button';
   back.textContent = '← node list';
-  back.dataset.action = 'back';
-  const status = element('div', `detail-status ${node?.online ? 'ok' : 'danger'}`);
-  status.textContent = node ? `● ${node.online ? 'online' : 'offline'}` : '';
+  back.addEventListener('click', handlers.onBack);
+  const status = element('button');
+  status.type = 'button';
   status.dataset.role = 'status';
-  control.append(back, status);
+  status.setAttribute('aria-controls', 'status-history');
+  status.addEventListener('click', handlers.onStatusToggle);
+  renderStatusButton(status, node, view);
+  const panel = element('div', 'status-panel');
+  panel.id = 'status-history';
+  panel.dataset.role = 'status-panel';
+  panel.setAttribute('aria-label', 'status history');
+  renderStatusPanel(panel, view, handlers.onStatusRetry);
+  control.append(back, status, panel);
 
   const title = element('h1', 'detail-name');
   title.dataset.role = 'name';
@@ -119,15 +131,16 @@ function renderCore(container: HTMLElement, node: NodeState | null): void {
   container.replaceChildren(control, title, table);
 }
 
-export function updateDetailCore(container: HTMLElement, node: NodeState | null): void {
-  const status = container.querySelector<HTMLElement>('[data-role="status"]');
+export function updateDetailCore(container: HTMLElement, node: NodeState | null, view: StatusView, onStatusRetry: () => void): void {
+  const status = container.querySelector<HTMLButtonElement>('[data-role="status"]');
+  const panel = container.querySelector<HTMLElement>('[data-role="status-panel"]');
   const title = container.querySelector<HTMLElement>('[data-role="name"]');
   const row = container.querySelector<HTMLElement>('.metric-row-container');
-  if (!status || !title || !row) {
+  if (!status || !panel || !title || !row) {
     return;
   }
-  status.className = `detail-status ${node?.online ? 'ok' : 'danger'}`;
-  status.textContent = node ? `● ${node.online ? 'online' : 'offline'}` : '';
+  renderStatusButton(status, node, view);
+  renderStatusPanel(panel, view, onStatusRetry);
   updateDetailName(title, node);
   appendMetricRow(row, node);
 }
@@ -135,8 +148,7 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null)
 export function renderDetailView(container: HTMLElement, options: DetailOptions): void {
   const section = element('section', 'detail');
   const core = element('div', 'detail-core');
-  renderCore(core, options.node);
-  core.querySelector<HTMLButtonElement>('[data-action="back"]')?.addEventListener('click', options.handlers.onBack);
+  renderCore(core, options.node, options.status, options.handlers);
   section.append(core);
 
   if (!options.node) {
@@ -214,6 +226,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
       colorAssignments: options.colorAssignments,
       labels: taskLabels,
       rangeHours: options.latencyRange,
+      offline: options.status.history?.intervals ?? [],
     });
   }
   latencySection.append(chart);
@@ -237,6 +250,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
         colorAssignments: new Map([[taskId, latencySeriesColor(taskId)]]) as LatencyColorAssignment,
         labels: taskLabels,
         rangeHours: options.latencyRange,
+        offline: options.status.history?.intervals ?? [],
       });
     }
     overflow.append(heading, overflowChart);

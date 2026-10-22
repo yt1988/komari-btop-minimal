@@ -27,6 +27,7 @@ export type LiveReport = {
   ram: ResourceUsage | null;
   disk: ResourceUsage | null;
   network: NetworkUsage | null;
+  uptimeSeconds: number | null;
   updatedAt: number | null;
 };
 
