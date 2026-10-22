@@ -225,13 +225,8 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
         lane.append(cell);
       }
       laneSvg.append(lane);
-      const mark = document.createElement('span');
-      mark.className = `loss-lane-mark${options.visibleTaskIds.includes(taskId) ? '' : ' is-hidden'}`;
-      mark.style.top = `${y + LANE_HEIGHT / 2}px`;
-      mark.style.backgroundColor = color;
-      lanes.append(mark);
     });
-    lanes.prepend(laneSvg);
+    lanes.append(laneSvg);
     graphArea.append(lanes);
   }
 

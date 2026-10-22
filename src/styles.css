@@ -557,10 +557,10 @@ button {
   white-space: nowrap;
 }
 
-/* Legend under the chart, aligned with the plot's left edge. */
+/* Legend under the chart, centred on the plot (the padding matches the y-axis gutter). */
 .probe-set {
   gap: 6px 28px;
-  justify-content: flex-start;
+  justify-content: center;
   margin-top: 12px;
   padding-left: 58px;
 }
@@ -632,7 +632,6 @@ button {
 }
 
 .loss-lanes {
-  position: relative;
   margin: 6px 0 4px;
 }
 
@@ -648,14 +647,6 @@ button {
 
 .loss-lanes .is-hidden {
   opacity: 0.25;
-}
-
-.loss-lane-mark {
-  position: absolute;
-  right: calc(100% + 10px);
-  width: 16px;
-  height: 2px;
-  transform: translateY(-50%);
 }
 
 .cross {
