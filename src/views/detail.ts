@@ -1,6 +1,6 @@
-import { formatBytes, formatPercent, formatSpeed, metricTone, networkTone } from '../format';
+import { formatBytes, formatLoss, formatPercent, formatSpeed, lossTone, metricTone, networkTone } from '../format';
 import type { LatencyQuery, NodeState } from '../domain';
-import { LATENCY_RANGES, latencySeriesColor } from '../latency';
+import { LATENCY_RANGES, latencySeriesColor, latencyStats } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { renderLatencyChart } from './chart';
@@ -205,11 +205,27 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     const label = element('span');
     label.textContent = taskLabels.get(taskId) ?? taskId;
     button.append(label);
+    // Range totals: mean of replied probes, ±jitter, loss.
+    const stats = latencyStats(options.latency?.series.find((series) => series.taskId === taskId)?.points ?? []);
+    if (stats.mean !== null) {
+      const mean = element('span', 'probe-stat');
+      mean.textContent = `${Math.round(stats.mean)}ms`;
+      button.append(mean);
+      if (stats.jitter !== null) {
+        const jitter = element('span', 'probe-stat muted');
+        jitter.textContent = `±${Math.round(stats.jitter)}`;
+        button.append(jitter);
+      }
+    }
+    if (stats.loss !== null) {
+      const loss = element('span', `probe-stat ${lossTone(stats.loss)}`);
+      loss.textContent = formatLoss(stats.loss);
+      button.append(loss);
+    }
     button.setAttribute('aria-pressed', String(options.visibleTaskIds.includes(taskId)));
     button.addEventListener('click', () => options.handlers.onTaskToggle(taskId));
     probes.append(button);
   });
-  heading.append(probes);
   latencySection.append(heading);
 
   const chart = element('div', 'chart-container');
@@ -237,9 +253,11 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
       labels: taskLabels,
       rangeHours: options.latencyRange,
       offline: options.status.outages ?? [],
+      laneTaskIds: taskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
     });
   }
-  latencySection.append(chart);
+  // The legend sits under the chart and still filters it.
+  latencySection.append(chart, probes);
 
   const overflowIds = options.overflowTaskIds.filter((taskId) => options.visibleTaskIds.includes(taskId));
   overflowIds.forEach((taskId) => {

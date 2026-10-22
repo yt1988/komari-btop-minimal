@@ -528,7 +528,15 @@ button {
 .probe {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
+}
+
+.probe-stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.probe:not(.active) .probe-stat {
+  opacity: 0.6;
 }
 
 .probe-swatch {
@@ -549,9 +557,12 @@ button {
   white-space: nowrap;
 }
 
+/* Legend under the chart, aligned with the plot's left edge. */
 .probe-set {
-  margin-left: auto;
-  justify-content: flex-end;
+  gap: 6px 28px;
+  justify-content: flex-start;
+  margin-top: 12px;
+  padding-left: 58px;
 }
 
 .range,
@@ -613,6 +624,38 @@ button {
   stroke-linejoin: round;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
+}
+
+.latency-band {
+  fill-opacity: 0.22;
+  stroke: none;
+}
+
+.loss-lanes {
+  position: relative;
+  margin: 6px 0 4px;
+}
+
+.loss-lanes svg {
+  display: block;
+  width: 100%;
+}
+
+.loss-track {
+  fill: #0d3a20;
+  fill-opacity: 0.55;
+}
+
+.loss-lanes .is-hidden {
+  opacity: 0.25;
+}
+
+.loss-lane-mark {
+  position: absolute;
+  right: calc(100% + 10px);
+  width: 16px;
+  height: 2px;
+  transform: translateY(-50%);
 }
 
 .cross {
@@ -913,7 +956,6 @@ button {
 
   .probe-set {
     flex-basis: 100%;
-    margin-left: 0;
   }
 
   .graph {

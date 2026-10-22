@@ -5,6 +5,7 @@ import type {
   NodeMetadata,
   PingTask,
 } from '../domain';
+import { mergeLatencyQuality } from '../latency';
 
 type JsonObject = Record<string, unknown>;
 
@@ -211,7 +212,10 @@ export function parseLatencyQuery(raw: unknown): LatencyQuery {
       if (timestamp === null) {
         throw new Error('/api/rpc2: latency point is missing time');
       }
-      return { timestamp, value: asNullableNumber(value.value) };
+      const samples = asNullableNumber(value.count);
+      return samples === null
+        ? { timestamp, value: asNullableNumber(value.value) }
+        : { timestamp, value: asNullableNumber(value.value), samples };
     });
     return {
       taskId,
@@ -254,26 +258,51 @@ export async function fetchLoadRecordTimes(uuid: string, hours: number, signal?:
   return parseLoadRecordTimes(await fetchJson(`/api/records/load?${query}`, { signal }));
 }
 
-export async function fetchLatency(uuid: string, hours: number, signal?: AbortSignal): Promise<LatencyQuery> {
+async function queryPingMetric(
+  uuid: string,
+  hours: number,
+  metricKey: 'ping.latency_ms' | 'ping.loss',
+  aggregation: 'avg' | 'stddev',
+  signal?: AbortSignal,
+): Promise<LatencyQuery> {
   const raw = await fetchJson('/api/rpc2', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
     body: JSON.stringify({
       jsonrpc: '2.0',
-      id: `latency-${uuid}-${hours}`,
+      id: `${metricKey}-${aggregation}-${uuid}-${hours}`,
       method: 'public:queryMetrics',
       params: {
-        metric_key: 'ping.latency_ms',
+        metric_key: metricKey,
         entity_id: uuid,
         hours,
         max_points: 480,
-        aggregation: 'avg',
+        aggregation,
         fill_empty: false,
       },
     }),
   });
   return parseLatencyQuery(raw);
+}
+
+/**
+ * Per-bucket latency with lost probes excluded, plus spread and loss. The
+ * stddev and loss queries are optional; without them the plain mean is shown.
+ */
+export async function fetchLatency(uuid: string, hours: number, signal?: AbortSignal): Promise<LatencyQuery> {
+  const optional = (query: Promise<LatencyQuery>): Promise<LatencyQuery | null> => query.catch((error: unknown) => {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error;
+    }
+    return null;
+  });
+  const [average, deviation, loss] = await Promise.all([
+    queryPingMetric(uuid, hours, 'ping.latency_ms', 'avg', signal),
+    optional(queryPingMetric(uuid, hours, 'ping.latency_ms', 'stddev', signal)),
+    optional(queryPingMetric(uuid, hours, 'ping.loss', 'avg', signal)),
+  ]);
+  return mergeLatencyQuality(average, deviation, loss);
 }
 
 export type LiveSocketScope = 'all' | 'node';

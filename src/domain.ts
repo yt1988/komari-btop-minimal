@@ -54,7 +54,14 @@ export type PingTask = {
 
 export type LatencyPoint = {
   timestamp: number;
+  /** Mean latency of the probes that got a reply; null when every probe was lost. */
   value: number | null;
+  /** Standard deviation of the replied probes in the bucket. */
+  spread?: number | null;
+  /** Lost share of the bucket's probes, 0..1. */
+  loss?: number | null;
+  /** Probes in the bucket, lost ones included. */
+  samples?: number | null;
 };
 
 export type LatencySeries = {

@@ -1,4 +1,4 @@
-import type { LatencyPoint, LatencySeries, PingTask } from './domain';
+import type { LatencyPoint, LatencyQuery, LatencySeries, PingTask } from './domain';
 
 export const LATENCY_RANGES = [
   { label: '1h', hours: 1 },
@@ -50,7 +50,106 @@ export type LatencyReadoutEntry = {
   taskId: string;
   label: string;
   value: number;
+  loss: number | null;
 };
+
+/**
+ * Komari records a lost probe as -1ms and averages it in. Given the bucket's
+ * mean, standard deviation, probe count and loss share, this recovers the mean
+ * and standard deviation of the probes that actually replied.
+ */
+export function correctLostProbes(
+  mean: number | null,
+  spread: number | null,
+  samples: number | null,
+  loss: number | null,
+): { value: number | null; spread: number | null } {
+  if (mean === null || samples === null || samples <= 0 || loss === null || loss <= 0) {
+    return { value: mean, spread };
+  }
+  const lost = Math.round(loss * samples);
+  const replied = samples - lost;
+  if (replied <= 0) {
+    return { value: null, spread: null };
+  }
+  const value = (mean * samples + lost) / replied;
+  if (spread === null) {
+    return { value, spread: null };
+  }
+  // Sum of squares over all probes, minus the lost probes' (-1)^2 each.
+  const variance = ((spread * spread + mean * mean) * samples - lost) / replied - value * value;
+  return { value, spread: Math.sqrt(Math.max(0, variance)) };
+}
+
+/**
+ * Merges the per-bucket mean, standard deviation and loss queries into one
+ * corrected series per target. Missing stddev or loss data degrades to the
+ * plain mean.
+ */
+export function mergeLatencyQuality(
+  average: LatencyQuery,
+  deviation: LatencyQuery | null,
+  loss: LatencyQuery | null,
+): LatencyQuery {
+  const lookup = (query: LatencyQuery | null, taskId: string): Map<number, LatencyPoint> =>
+    new Map((query?.series.find((item) => item.taskId === taskId)?.points ?? []).map((point) => [point.timestamp, point]));
+  return {
+    ...average,
+    series: average.series.map((series) => {
+      const deviations = lookup(deviation, series.taskId);
+      const losses = lookup(loss, series.taskId);
+      return {
+        ...series,
+        points: series.points.map((point) => {
+          const samples = point.samples ?? null;
+          const lossShare = loss === null ? null : losses.get(point.timestamp)?.value ?? 0;
+          const corrected = correctLostProbes(point.value, deviations.get(point.timestamp)?.value ?? null, samples, lossShare);
+          return { timestamp: point.timestamp, ...corrected, loss: lossShare, samples };
+        }),
+      };
+    }),
+  };
+}
+
+export type LatencyStats = {
+  /** Mean latency of replied probes over the range. */
+  mean: number | null;
+  /** Average within-bucket standard deviation, i.e. short-term jitter. */
+  jitter: number | null;
+  /** Lost share of all probes over the range, 0..1. */
+  loss: number | null;
+};
+
+export function latencyStats(points: readonly LatencyPoint[]): LatencyStats {
+  let replied = 0;
+  let meanSum = 0;
+  let spreadWeight = 0;
+  let spreadSum = 0;
+  let probes = 0;
+  let lostSum = 0;
+  for (const point of points) {
+    const samples = point.samples ?? 1;
+    if (typeof point.loss === 'number') {
+      probes += samples;
+      lostSum += point.loss * samples;
+    }
+    if (typeof point.value !== 'number' || point.value < 0) {
+      continue;
+    }
+    const weight = samples * (1 - (point.loss ?? 0));
+    replied += weight;
+    meanSum += point.value * weight;
+    if (typeof point.spread === 'number') {
+      spreadWeight += weight;
+      spreadSum += point.spread * weight;
+    }
+  }
+  return {
+    mean: replied > 0 ? meanSum / replied : null,
+    jitter: spreadWeight > 0 ? spreadSum / spreadWeight : null,
+    loss: probes > 0 ? lostSum / probes : null,
+  };
+}
 
 function seriesIndex(taskId: string): number {
   let hash = 0;
@@ -68,8 +167,8 @@ export function latencySeriesColor(taskId: string, _allTaskIds: readonly string[
   return LATENCY_SERIES_COLORS[seriesIndex(taskId) % LATENCY_SERIES_COLORS.length]!;
 }
 
-function nearestLatencyPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {
-  let nearest: { timestamp: number; value: number } | null = null;
+function nearestLatencyPoint(series: LatencySeries, timestamp: number): LatencyPoint & { value: number } | null {
+  let nearest: LatencyPoint & { value: number } | null = null;
   let distance = Number.POSITIVE_INFINITY;
   for (const point of series.points) {
     if (typeof point.value !== 'number' || !Number.isFinite(point.value) || point.value < 0) {
@@ -77,7 +176,7 @@ function nearestLatencyPoint(series: LatencySeries, timestamp: number): { timest
     }
     const candidateDistance = Math.abs(point.timestamp - timestamp);
     if (candidateDistance < distance) {
-      nearest = point as { timestamp: number; value: number };
+      nearest = point as LatencyPoint & { value: number };
       distance = candidateDistance;
     }
   }
@@ -105,6 +204,7 @@ export function latencyReadoutEntries(
         taskId: lineSeries.taskId,
         label: labels.get(lineSeries.taskId) ?? lineSeries.label,
         value: point.value,
+        loss: point.loss ?? null,
       });
     }
   }

@@ -1,3 +1,4 @@
+import { formatLoss } from '../format';
 import type { LatencyQuery, LatencySeries } from '../domain';
 import {
   buildLatencyRuns,
@@ -40,7 +41,12 @@ export type LatencyChartOptions = {
   labels: Map<string, string>;
   rangeHours: number;
   offline?: readonly OfflineInterval[];
+  /** Targets that get a loss lane, hidden ones included so the height never changes. */
+  laneTaskIds?: readonly string[];
 };
+
+const LANE_HEIGHT = 5;
+const LANE_GAP = 4;
 
 export function renderLatencyChart(container: HTMLElement, options: LatencyChartOptions): void {
   container.replaceChildren();
@@ -59,7 +65,11 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   const start = options.query?.start || earliest;
   const end = options.query?.end || latest;
   const timeSpan = Math.max(1, end - start);
-  const ceiling = latencyCeiling(points);
+  // The ceiling leaves room for the top of each spread band.
+  const ceiling = latencyCeiling(points.map((point) => ({
+    ...point,
+    value: point.value === null ? null : point.value + (point.spread ?? 0),
+  })));
   const ticks = latencyTicks(ceiling);
   const toX = (timestamp: number): number => (timestamp - start) / timeSpan * 1000;
   const toY = (value: number): number => 280 - Math.min(ceiling, value) / ceiling * 280;
@@ -126,17 +136,28 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   // with non-scaling strokes rather than circles, which would render as ellipses.
   const dotPath = (x: number, y: number): string => `M ${x.toFixed(3)} ${y.toFixed(3)} l 0 0`;
   const markers = new Map<string, SVGPathElement>();
+  const colorOf = (taskId: string): string => options.colorAssignments.get(taskId) ?? latencySeriesColor(taskId, options.allTaskIds);
+  const sampleInterval = options.query?.intervalSeconds && options.query.intervalSeconds > 0
+    ? options.query.intervalSeconds * 1000
+    : Math.max(1, options.rangeHours * 60 / 480) * 60_000;
   series.forEach((lineSeries) => {
-    const color = options.colorAssignments.get(lineSeries.taskId) ?? latencySeriesColor(lineSeries.taskId, options.allTaskIds);
+    const color = colorOf(lineSeries.taskId);
     const group = svgElement('g');
     group.setAttribute('aria-label', options.labels.get(lineSeries.taskId) ?? lineSeries.label);
-    const sampleInterval = options.query?.intervalSeconds && options.query.intervalSeconds > 0
-      ? options.query.intervalSeconds * 1000
-      : Math.max(1, options.rangeHours * 60 / 480) * 60_000;
     for (const run of buildLatencyRuns(lineSeries.points, sampleInterval)) {
       const first = run[0];
       if (!first) {
         continue;
+      }
+      // Smokeping-style band: mean ± one standard deviation of the replied probes.
+      if (run.length > 1 && run.every((point) => typeof point.spread === 'number')) {
+        const upper = run.map((point) => `${toX(point.timestamp).toFixed(3)},${toY(point.value + point.spread!).toFixed(3)}`);
+        const lower = run.map((point) => `${toX(point.timestamp).toFixed(3)},${toY(Math.max(0, point.value - point.spread!)).toFixed(3)}`).reverse();
+        const band = svgElement('polygon');
+        band.classList.add('latency-band');
+        band.style.fill = color;
+        band.setAttribute('points', [...upper, ...lower].join(' '));
+        group.append(band);
       }
       const path = svgElement('path');
       path.style.stroke = color;
@@ -162,6 +183,57 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   });
   plot.append(axis, graph);
   graphArea.append(plot);
+
+  // One loss lane per target, in legend order. Loss is drawn in the target's own
+  // color, brighter with more loss; hidden targets keep a dimmed lane.
+  const laneTaskIds = options.laneTaskIds ?? series.map((item) => item.taskId);
+  if (laneTaskIds.length > 0) {
+    const lanes = document.createElement('div');
+    lanes.className = 'loss-lanes';
+    lanes.setAttribute('aria-hidden', 'true');
+    const laneHeight = laneTaskIds.length * (LANE_HEIGHT + LANE_GAP) - LANE_GAP;
+    const laneSvg = svgElement('svg');
+    laneSvg.setAttribute('viewBox', `0 0 1000 ${laneHeight}`);
+    laneSvg.setAttribute('preserveAspectRatio', 'none');
+    laneSvg.style.height = `${laneHeight}px`;
+    const bucketWidth = Math.max(0.5, sampleInterval / timeSpan * 1000);
+    laneTaskIds.forEach((taskId, row) => {
+      const y = row * (LANE_HEIGHT + LANE_GAP);
+      const color = colorOf(taskId);
+      const lane = svgElement('g');
+      if (!options.visibleTaskIds.includes(taskId)) {
+        lane.classList.add('is-hidden');
+      }
+      const track = svgElement('rect');
+      track.classList.add('loss-track');
+      track.setAttribute('x', '0');
+      track.setAttribute('y', String(y));
+      track.setAttribute('width', '1000');
+      track.setAttribute('height', String(LANE_HEIGHT));
+      lane.append(track);
+      for (const point of options.query?.series.find((item) => item.taskId === taskId)?.points ?? []) {
+        if (typeof point.loss !== 'number' || point.loss <= 0) {
+          continue;
+        }
+        const cell = svgElement('rect');
+        cell.setAttribute('x', (toX(point.timestamp) - bucketWidth / 2).toFixed(3));
+        cell.setAttribute('y', String(y));
+        cell.setAttribute('width', bucketWidth.toFixed(3));
+        cell.setAttribute('height', String(LANE_HEIGHT));
+        cell.style.fill = color;
+        cell.style.fillOpacity = Math.min(1, 0.3 + point.loss * 1.6).toFixed(2);
+        lane.append(cell);
+      }
+      laneSvg.append(lane);
+      const mark = document.createElement('span');
+      mark.className = `loss-lane-mark${options.visibleTaskIds.includes(taskId) ? '' : ' is-hidden'}`;
+      mark.style.top = `${y + LANE_HEIGHT / 2}px`;
+      mark.style.backgroundColor = color;
+      lanes.append(mark);
+    });
+    lanes.prepend(laneSvg);
+    graphArea.append(lanes);
+  }
 
   const xAxis = document.createElement('div');
   xAxis.className = 'axis-x';
@@ -228,6 +300,9 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       swatch.style.backgroundColor = options.colorAssignments.get(entry.taskId) ?? latencySeriesColor(entry.taskId, options.allTaskIds);
       swatch.setAttribute('aria-hidden', 'true');
       value.append(swatch, document.createTextNode(`${entry.label} ${entry.value.toFixed(1)}ms`));
+      if (entry.loss !== null && entry.loss > 0) {
+        value.append(document.createTextNode(` ${formatLoss(entry.loss)}`));
+      }
       readout.append(separator, value);
     });
     readout.style.left = `${ratio * 100}%`;

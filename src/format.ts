@@ -79,6 +79,22 @@ export function formatPercent(value: number | null | undefined): string {
   return `${Math.round(Math.min(100, safeValue))}%`;
 }
 
+/** Loss share 0..1 as `0.3%` below 10%, `43%` above. */
+export function formatLoss(share: number | null | undefined): string {
+  const safeValue = finiteNonNegative(share);
+  if (safeValue === null) {
+    return '--';
+  }
+  const percent = Math.min(100, safeValue * 100);
+  return `${percent < 10 ? percent.toFixed(1) : Math.round(percent)}%`;
+}
+
+/** Loss tone: quiet below 1%, warning to 5%, danger above. */
+export function lossTone(share: number | null | undefined): 'muted' | 'warn' | 'danger' {
+  const percent = (finiteNonNegative(share) ?? 0) * 100;
+  return percent >= 5 ? 'danger' : percent >= 1 ? 'warn' : 'muted';
+}
+
 export function progressBar(valueOrRatio: number, totalOrWidth: number, width?: number): string {
   const resolvedWidth = width ?? totalOrWidth;
   if (!Number.isInteger(resolvedWidth) || resolvedWidth <= 0) {
