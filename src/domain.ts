@@ -20,6 +20,7 @@ export type NodeMetadata = {
   diskTotal: number;
   trafficLimit: number;
   trafficLimitType: string;
+  createdAt: number | null;
 };
 
 export type LiveReport = {
@@ -27,7 +28,6 @@ export type LiveReport = {
   ram: ResourceUsage | null;
   disk: ResourceUsage | null;
   network: NetworkUsage | null;
-  uptimeSeconds: number | null;
   updatedAt: number | null;
 };
 

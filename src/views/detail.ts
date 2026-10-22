@@ -13,7 +13,6 @@ export type DetailHandlers = {
   onLatencyRetry: () => void;
   onTaskToggle: (taskId: string) => void;
   onStatusToggle: () => void;
-  onStatusRetry: () => void;
 };
 
 export type DetailOptions = {
@@ -111,7 +110,7 @@ function renderCore(container: HTMLElement, node: NodeState | null, view: Status
   panel.id = 'status-history';
   panel.dataset.role = 'status-panel';
   panel.setAttribute('aria-label', 'status history');
-  renderStatusPanel(panel, view, handlers.onStatusRetry);
+  renderStatusPanel(panel, view);
   control.append(back, status, panel);
 
   const title = element('h1', 'detail-name');
@@ -131,7 +130,7 @@ function renderCore(container: HTMLElement, node: NodeState | null, view: Status
   container.replaceChildren(control, title, table);
 }
 
-export function updateDetailCore(container: HTMLElement, node: NodeState | null, view: StatusView, onStatusRetry: () => void): void {
+export function updateDetailCore(container: HTMLElement, node: NodeState | null, view: StatusView): void {
   const status = container.querySelector<HTMLButtonElement>('[data-role="status"]');
   const panel = container.querySelector<HTMLElement>('[data-role="status-panel"]');
   const title = container.querySelector<HTMLElement>('[data-role="name"]');
@@ -140,7 +139,7 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null,
     return;
   }
   renderStatusButton(status, node, view);
-  renderStatusPanel(panel, view, onStatusRetry);
+  renderStatusPanel(panel, view);
   updateDetailName(title, node);
   appendMetricRow(row, node);
 }
@@ -226,7 +225,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
       colorAssignments: options.colorAssignments,
       labels: taskLabels,
       rangeHours: options.latencyRange,
-      offline: options.status.history?.intervals ?? [],
+      offline: options.status.outages ?? [],
     });
   }
   latencySection.append(chart);
@@ -250,7 +249,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
         colorAssignments: new Map([[taskId, latencySeriesColor(taskId)]]) as LatencyColorAssignment,
         labels: taskLabels,
         rangeHours: options.latencyRange,
-        offline: options.status.history?.intervals ?? [],
+        offline: options.status.outages ?? [],
       });
     }
     overflow.append(heading, overflowChart);

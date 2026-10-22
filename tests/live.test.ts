@@ -8,7 +8,6 @@ function report(updatedAt: number | null, cpuUsage = 10): LiveReport {
     ram: null,
     disk: null,
     network: null,
-    uptimeSeconds: null,
     updatedAt,
   };
 }
@@ -49,7 +48,6 @@ describe('live snapshot reconciliation', () => {
             ram: { total: null, used: 0 },
             disk: null,
             network: { up: 0, down: null, totalUp: null, totalDown: 0 },
-            uptimeSeconds: null,
             updatedAt: 100,
           },
         },

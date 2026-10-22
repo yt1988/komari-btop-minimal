@@ -132,6 +132,13 @@ export function formatClock(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** `HH:MM` for today, `-HH:MM` for an earlier day (yesterday within a 24h window). */
+export function formatDayClock(timestamp: number, now: number): string {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  return `${timestamp < today.getTime() ? '-' : ''}${formatClock(timestamp)}`;
+}
+
 export function formatTimestamp(timestamp: number | null | undefined): string {
   if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) {
     return '--:--:--';

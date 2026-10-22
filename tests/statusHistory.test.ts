@@ -1,54 +1,68 @@
 import { describe, expect, it } from 'vitest';
 import { parseLoadRecordTimes } from '../src/api/komari';
-import { formatDuration } from '../src/format';
-import { buildStatusHistory, currentStateSince } from '../src/statusHistory';
+import { formatDayClock, formatDuration } from '../src/format';
+import { buildOutages, currentStateSince } from '../src/statusHistory';
 
-const at = (time: string): number => Date.parse(`2026-10-22T${time}:00Z`);
+const at = (time: string, day = 22): number => Date.parse(`2026-10-${day}T${time}:00Z`);
 
-function minutes(from: string, to: string): number[] {
+function every(minutes: number, from: number, to: number): number[] {
   const times: number[] = [];
-  for (let time = at(from); time <= at(to); time += 60_000) {
+  for (let time = from; time <= to; time += minutes * 60_000) {
     times.push(time);
   }
   return times;
 }
 
-// Bero.6 on 2026-10-22: added at 06:25, two outages, rebooted at 07:37.
-const bero = [...minutes('06:25', '06:29'), ...minutes('06:55', '07:19'), ...minutes('07:40', '07:57')];
+const now = at('08:25');
+const old = Date.parse('2026-01-01T00:00:00Z');
 
-describe('status history', () => {
-  it('infers outages and the latest reboot from record gaps', () => {
-    const history = buildStatusHistory({
-      recordTimes: bero,
-      now: at('07:58'),
-      online: true,
-      lastReportAt: at('07:58'),
-      uptimeSeconds: 21 * 60,
-    });
-    expect(history.intervals).toEqual([
-      { start: at('06:29'), end: at('06:55'), ongoing: false },
-      { start: at('07:19'), end: at('07:40'), ongoing: false },
+describe('outage history', () => {
+  it('uses per-minute records for the last 6h', () => {
+    // Bero.6 on 2026-10-22: created at 06:23, three outages.
+    const fine = [
+      ...every(1, at('06:25'), at('06:29')),
+      ...every(1, at('06:55'), at('07:19')),
+      ...every(1, at('07:40'), at('07:56')),
+      ...every(1, at('08:19'), now),
+    ];
+    const input = { fineTimes: fine, coarseTimes: every(5, at('06:25'), now), now, online: true, lastReportAt: now, createdAt: at('06:23') };
+    const outages = buildOutages(input);
+    expect(outages.map((outage) => [outage.start, outage.end])).toEqual([
+      [at('06:29'), at('06:55')],
+      [at('07:19'), at('07:40')],
+      [at('07:56'), at('08:19')],
     ]);
-    expect(history.boot).toBe(at('07:37'));
+    expect(currentStateSince(outages, true, input)).toEqual({ since: at('08:19'), atLeast: false });
   });
 
-  it('reports an ongoing outage while offline', () => {
-    const history = buildStatusHistory({
-      recordTimes: minutes('01:00', '07:19'),
-      now: at('07:53'),
-      online: false,
-      lastReportAt: at('07:19'),
-      uptimeSeconds: 900,
-    });
-    expect(history.intervals).toEqual([{ start: at('07:19'), end: at('07:53'), ongoing: true }]);
-    expect(history.boot).toBe(at('07:04'));
-    expect(currentStateSince(history, false, at('07:19'), 900, at('07:53'))).toBe(at('07:19'));
+  it('uses five-minute records before that and ignores skipped downsampling buckets', () => {
+    const coarse = every(5, at('08:30', 21), now)
+      .filter((time) => time <= at('23:00', 21) || time >= at('23:30', 21))
+      .filter((time) => time !== at('01:05') && time !== at('01:10'));
+    const input = { fineTimes: every(1, at('02:25'), now), coarseTimes: coarse, now, online: true, lastReportAt: now, createdAt: old };
+    const outages = buildOutages(input);
+    expect(outages).toEqual([{ start: at('23:00', 21), end: at('23:30', 21), ongoing: false, startClipped: false }]);
+    expect(currentStateSince(outages, true, input)).toEqual({ since: at('23:30', 21), atLeast: false });
   });
 
-  it('ignores missing single minutes and records older than the window', () => {
-    const times = minutes('01:00', '07:00').filter((time) => time !== at('04:00') && time !== at('04:01'));
-    const history = buildStatusHistory({ recordTimes: times, now: at('07:00'), online: true, lastReportAt: at('07:00'), uptimeSeconds: 86_400 });
-    expect(history).toEqual({ intervals: [], boot: null });
+  it('reports a node up for the whole window as at least 24h', () => {
+    const input = { fineTimes: every(1, at('02:25'), now), coarseTimes: every(5, at('08:30', 21), now), now, online: true, lastReportAt: now, createdAt: old };
+    const outages = buildOutages(input);
+    expect(outages).toEqual([]);
+    expect(currentStateSince(outages, true, input)).toEqual({ since: at('08:25', 21), atLeast: true });
+  });
+
+  it('keeps an outage that began before the window', () => {
+    const coarse = every(5, at('10:00', 21), now);
+    const input = { fineTimes: every(1, at('02:25'), now), coarseTimes: coarse, now, online: true, lastReportAt: now, createdAt: old };
+    expect(buildOutages(input)).toEqual([{ start: at('08:25', 21), end: at('10:00', 21), ongoing: false, startClipped: true }]);
+  });
+
+  it('dates an outage longer than the window from the last report', () => {
+    const input = { fineTimes: [], coarseTimes: [], now, online: false, lastReportAt: at('12:00', 19), createdAt: old };
+    const outages = buildOutages(input);
+    expect(outages).toEqual([{ start: at('12:00', 19), end: now, ongoing: true, startClipped: false }]);
+    expect(currentStateSince(outages, false, input)).toEqual({ since: at('12:00', 19), atLeast: false });
   });
 
   it('parses load record timestamps in order', () => {
@@ -56,6 +70,12 @@ describe('status history', () => {
       status: 'success',
       data: { records: [{ time: '2026-10-22T06:26:00Z' }, { time: '2026-10-22T06:25:00Z' }, { time: 'bad' }] },
     })).toEqual([at('06:25'), at('06:26')]);
+  });
+
+  it('marks times from the previous day with a leading dash', () => {
+    const local = (day: number, hour: number, minute: number): number => new Date(2026, 9, day, hour, minute).getTime();
+    expect(formatDayClock(local(22, 16, 19), local(22, 16, 40))).toBe('16:19');
+    expect(formatDayClock(local(21, 23, 50), local(22, 0, 10))).toBe('-23:50');
   });
 
   it('formats compact durations', () => {

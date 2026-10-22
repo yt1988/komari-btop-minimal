@@ -109,6 +109,7 @@ export function parseNodeMetadata(raw: unknown): NodeMetadata[] {
       diskTotal: asFiniteNumber(node.disk_total),
       trafficLimit: asFiniteNumber(node.traffic_limit),
       trafficLimitType: asString(node.traffic_limit_type, 'max'),
+      createdAt: parseTimestamp(node.created_at),
     };
   }).sort((left, right) => left.weight - right.weight);
 }
@@ -166,7 +167,6 @@ function parseLiveReport(raw: unknown): LiveReport {
     ram: resource(ram),
     disk: resource(disk),
     network: networkValue,
-    uptimeSeconds: asNullableNumber(report.uptime),
     updatedAt: parseTimestamp(report.updated_at),
   };
 }

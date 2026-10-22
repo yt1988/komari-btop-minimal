@@ -410,8 +410,11 @@ button {
   cursor: pointer;
 }
 
-.detail-status:focus-visible,
-.status-panel .retry:focus-visible {
+.detail-status:disabled {
+  cursor: default;
+}
+
+.detail-status:focus-visible {
   outline: 1px solid #35f477;
   outline-offset: 3px;
 }
@@ -419,7 +422,7 @@ button {
 .status-panel {
   display: grid;
   flex: 0 0 100%;
-  grid-template-columns: repeat(3, auto);
+  grid-template-columns: repeat(2, auto);
   justify-content: end;
   gap: 2px 2ch;
   margin-top: 8px;
@@ -432,7 +435,7 @@ button {
   display: none;
 }
 
-.status-note {
+.status-more {
   grid-column: 1 / -1;
 }
 

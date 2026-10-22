@@ -1,15 +1,16 @@
 import type { NodeState } from '../domain';
-import { formatClock, formatDuration } from '../format';
-import type { StatusHistory } from '../statusHistory';
+import { formatDayClock, formatDuration } from '../format';
+import type { OfflineInterval, StateSince } from '../statusHistory';
 
 export type StatusView = {
   open: boolean;
-  state: 'loading' | 'ready' | 'error';
-  history: StatusHistory | null;
-  /** Start of the current online or offline state, when known. */
-  since: number | null;
+  /** Oldest first; null until loaded. */
+  outages: OfflineInterval[] | null;
+  since: StateSince | null;
   now: number;
 };
+
+const MAX_ROWS = 5;
 
 function span(className: string, text: string): HTMLSpanElement {
   const node = document.createElement('span');
@@ -18,16 +19,26 @@ function span(className: string, text: string): HTMLSpanElement {
   return node;
 }
 
+/** The status only opens a list when the last 24h had an outage. */
+export function hasOutages(view: StatusView): boolean {
+  return (view.outages?.length ?? 0) > 0;
+}
+
 export function renderStatusButton(button: HTMLButtonElement, node: NodeState | null, view: StatusView): void {
   button.className = `detail-status ${node?.online ? 'ok' : 'danger'}`;
-  button.setAttribute('aria-expanded', String(view.open));
+  button.disabled = !hasOutages(view);
+  if (button.disabled) {
+    button.removeAttribute('aria-expanded');
+  } else {
+    button.setAttribute('aria-expanded', String(view.open));
+  }
   button.hidden = node === null;
   if (!node) {
     button.replaceChildren();
     return;
   }
   const label = node.online ? '● online' : '○ offline';
-  const since = view.since === null ? '' : ` ${formatDuration(view.now - view.since)}`;
+  const since = view.since === null ? '' : ` ${formatDuration(view.now - view.since.since)}${view.since.atLeast ? '+' : ''}`;
   if (button.textContent === `${label}${since}`) {
     return;
   }
@@ -37,52 +48,30 @@ export function renderStatusButton(button: HTMLButtonElement, node: NodeState | 
   }
 }
 
-/**
- * One row per outage, newest first, durations flush right under the status:
- * `↻15:36  15:19–15:40  21m`.
- */
-function content(view: StatusView, onRetry: () => void): HTMLElement[] {
-  if (view.state === 'error') {
-    const retry = document.createElement('button');
-    retry.type = 'button';
-    retry.className = 'retry';
-    retry.textContent = 'retry';
-    retry.addEventListener('click', onRetry);
-    const note = span('status-note danger', 'unavailable ');
-    note.append(retry);
-    return [note];
+/** One row per outage, newest first: `○ 15:56  ● 16:19`; the up time sits flush right under the status. */
+function rows(outages: readonly OfflineInterval[], now: number): HTMLElement[] {
+  const cell = (dot: string, tone: string, time: string): HTMLSpanElement => {
+    const node = span('muted', time);
+    node.prepend(span(tone, `${dot} `));
+    return node;
+  };
+  const cells = [...outages].reverse().slice(0, MAX_ROWS).flatMap((outage) => [
+    cell('○', 'danger', outage.startClipped ? '…' : formatDayClock(outage.start, now)),
+    outage.ongoing ? span('', '') : cell('●', 'ok', formatDayClock(outage.end, now)),
+  ]);
+  if (outages.length > MAX_ROWS) {
+    cells.push(span('status-more muted', `+${outages.length - MAX_ROWS}`));
   }
-  const history = view.history;
-  if (!history) {
-    return [span('status-note muted', 'loading')];
-  }
-  const boot = history.boot;
-  const within = (interval: { start: number; end: number }): boolean => boot !== null && boot >= interval.start && boot <= interval.end;
-  const rows: Array<{ at: number; cells: HTMLElement[] }> = history.intervals.map((interval) => ({
-    at: interval.start,
-    cells: [
-      span('warn', within(interval) ? `↻${formatClock(boot!)}` : ''),
-      span('muted', `${formatClock(interval.start)}–${interval.ongoing ? 'now' : formatClock(interval.end)}`),
-      span('danger', formatDuration(interval.end - interval.start)),
-    ],
-  }));
-  // A quick reboot can finish between two records and leave no outage behind.
-  if (boot !== null && !history.intervals.some(within)) {
-    rows.push({ at: boot, cells: [span('', ''), span('warn', `↻${formatClock(boot)}`), span('', '')] });
-  }
-  if (rows.length === 0) {
-    return [span('status-note muted', 'no outages')];
-  }
-  return rows.sort((left, right) => right.at - left.at).flatMap((row) => row.cells);
+  return cells;
 }
 
-/** Rebuilds the panel only when its visible content changed, so focus survives live updates. */
-export function renderStatusPanel(panel: HTMLElement, view: StatusView, onRetry: () => void): void {
-  panel.hidden = !view.open;
-  if (!view.open) {
+/** Rebuilds the list only when its visible content changed. */
+export function renderStatusPanel(panel: HTMLElement, view: StatusView): void {
+  panel.hidden = !(view.open && hasOutages(view));
+  if (panel.hidden || !view.outages) {
     return;
   }
-  const next = content(view, onRetry);
+  const next = rows(view.outages, view.now);
   const signature = next.map((part) => `${part.className}|${part.textContent}`).join('/');
   if (panel.dataset.signature === signature) {
     return;

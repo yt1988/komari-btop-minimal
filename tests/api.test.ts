@@ -22,6 +22,7 @@ describe('Komari response normalization', () => {
         disk_total: 2048,
         traffic_limit: 4096,
         traffic_limit_type: 'sum',
+        created_at: '2026-10-22T06:23:19Z',
         ignored: true,
       }],
     };
@@ -35,6 +36,7 @@ describe('Komari response normalization', () => {
       diskTotal: 2048,
       trafficLimit: 4096,
       trafficLimitType: 'sum',
+      createdAt: Date.parse('2026-10-22T06:23:19Z'),
     }]);
   });
 
@@ -85,7 +87,6 @@ describe('Komari response normalization', () => {
           ram: { total: 100, used: 25 },
           disk: { total: 200, used: 50 },
           network: { up: 10, down: 20, totalUp: 1000, totalDown: 2000 },
-          uptimeSeconds: null,
           updatedAt: Date.parse('2026-10-11T01:02:03Z'),
         },
       },

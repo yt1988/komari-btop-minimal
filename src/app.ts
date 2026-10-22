@@ -17,7 +17,7 @@ import {
   type NodeLatencyColorRegistry,
 } from './latencyColors';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
-import { STATUS_HISTORY_HOURS, buildStatusHistory, currentStateSince } from './statusHistory';
+import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages, currentStateSince } from './statusHistory';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
 import type { StatusView } from './views/status';
@@ -43,8 +43,8 @@ type ApplicationState = {
   latency: LatencyQuery | null;
   latencyStatus: LatencyStatus;
   visibleTaskIds: string[] | null;
-  statusRecords: number[] | null;
-  statusStatus: LatencyStatus;
+  statusFine: number[] | null;
+  statusCoarse: number[] | null;
   statusOpen: boolean;
 };
 
@@ -63,7 +63,8 @@ function isNodeMetadata(value: unknown): value is NodeMetadata {
     && typeof node.memTotal === 'number'
     && typeof node.diskTotal === 'number'
     && typeof node.trafficLimit === 'number'
-    && typeof node.trafficLimitType === 'string';
+    && typeof node.trafficLimitType === 'string'
+    && (node.createdAt === null || typeof node.createdAt === 'number');
 }
 
 function currentRoute(): Route {
@@ -132,13 +133,14 @@ export function startApp(root: HTMLElement): () => void {
     latency: null,
     latencyStatus: 'loading',
     visibleTaskIds: null,
-    statusRecords: null,
-    statusStatus: 'loading',
+    statusFine: null,
+    statusCoarse: null,
     statusOpen: false,
   };
   let statusController: AbortController | null = null;
   let statusRequestId = 0;
   let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let statusCoarseAt = 0;
   let latencyController: AbortController | null = null;
   let latencyRequestId = 0;
   let latencyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -181,21 +183,23 @@ export function startApp(root: HTMLElement): () => void {
 
   const getStatusView = (node: NodeState | null): StatusView => {
     const now = Date.now();
-    const uptimeSeconds = node?.report?.uptimeSeconds ?? null;
-    const history = node && state.statusRecords !== null
-      ? buildStatusHistory({
-        recordTimes: state.statusRecords,
-        now,
-        online: node.online,
-        lastReportAt: node.lastReportAt,
-        uptimeSeconds,
-      })
-      : null;
+    const input = {
+      fineTimes: state.statusFine,
+      coarseTimes: state.statusCoarse,
+      now,
+      online: node?.online ?? false,
+      lastReportAt: node?.lastReportAt ?? null,
+      createdAt: node?.metadata.createdAt ?? null,
+    };
+    const outages = node && state.statusCoarse !== null ? buildOutages(input) : null;
+    if (outages?.length === 0) {
+      // Without outages the status is plain text, so drop any stale open state.
+      state.statusOpen = false;
+    }
     return {
       open: state.statusOpen,
-      state: state.statusStatus,
-      history,
-      since: node ? currentStateSince(history, node.online, node.lastReportAt, uptimeSeconds, now) : null,
+      outages,
+      since: node && outages ? currentStateSince(outages, node.online, input) : null,
       now,
     };
   };
@@ -204,7 +208,7 @@ export function startApp(root: HTMLElement): () => void {
     const core = page.querySelector<HTMLElement>('.detail-core');
     if (core && state.route.type === 'detail') {
       const node = getCurrentNode();
-      updateDetailCore(core, node, getStatusView(node), retryStatus);
+      updateDetailCore(core, node, getStatusView(node));
     }
   };
 
@@ -215,19 +219,30 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
-  /** Loads the per-minute records behind the status history and chart offline bands. */
+  /**
+   * Loads the record times behind the outage list and chart offline bands:
+   * per-minute data for the last 6h every call, five-minute data for 24h at
+   * most every 10 minutes.
+   */
   const loadStatusRecords = (uuid: string): void => {
     clearStatusRefresh();
     statusController?.abort();
     const requestId = ++statusRequestId;
     const controller = new AbortController();
     statusController = controller;
-    void fetchLoadRecordTimes(uuid, STATUS_HISTORY_HOURS, controller.signal).then((times) => {
+    const refreshCoarse = state.statusCoarse === null || Date.now() - statusCoarseAt > 600_000;
+    void Promise.all([
+      fetchLoadRecordTimes(uuid, STATUS_FINE_HOURS, controller.signal),
+      refreshCoarse ? fetchLoadRecordTimes(uuid, STATUS_HISTORY_HOURS, controller.signal) : Promise.resolve(state.statusCoarse ?? []),
+    ]).then(([fine, coarse]) => {
       if (stopped || requestId !== statusRequestId || state.route.type !== 'detail' || state.route.uuid !== uuid) {
         return;
       }
-      state.statusRecords = times;
-      state.statusStatus = 'ready';
+      if (refreshCoarse) {
+        statusCoarseAt = Date.now();
+      }
+      state.statusFine = fine;
+      state.statusCoarse = coarse;
       render();
       statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 120_000);
     }).catch((error: unknown) => {
@@ -235,24 +250,12 @@ export function startApp(root: HTMLElement): () => void {
       if (stopped || requestId !== statusRequestId || aborted) {
         return;
       }
-      if (state.statusRecords === null) {
-        state.statusStatus = 'error';
-        updateCore();
-      }
       statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 60_000);
     }).finally(() => {
       if (statusController === controller) {
         statusController = null;
       }
     });
-  };
-
-  const retryStatus = (): void => {
-    if (state.route.type === 'detail') {
-      state.statusStatus = 'loading';
-      updateCore();
-      loadStatusRecords(state.route.uuid);
-    }
   };
 
   const setStatusOpen = (open: boolean): void => {
@@ -404,7 +407,6 @@ export function startApp(root: HTMLElement): () => void {
         onStatusToggle: () => {
           setStatusOpen(!state.statusOpen);
         },
-        onStatusRetry: retryStatus,
       },
     });
   };
@@ -467,8 +469,8 @@ export function startApp(root: HTMLElement): () => void {
     clearStatusRefresh();
     statusController?.abort();
     statusController = null;
-    state.statusRecords = null;
-    state.statusStatus = 'loading';
+    state.statusFine = null;
+    state.statusCoarse = null;
     state.statusOpen = false;
     if (route.type === 'detail') {
       loadStatusRecords(route.uuid);
