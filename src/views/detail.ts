@@ -226,6 +226,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     button.addEventListener('click', () => options.handlers.onTaskToggle(taskId));
     probes.append(button);
   });
+  heading.append(probes);
   latencySection.append(heading);
 
   const chart = element('div', 'chart-container');
@@ -256,8 +257,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
       laneTaskIds: taskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
     });
   }
-  // The legend sits under the chart and still filters it.
-  latencySection.append(chart, probes);
+  latencySection.append(chart);
 
   const overflowIds = options.overflowTaskIds.filter((taskId) => options.visibleTaskIds.includes(taskId));
   overflowIds.forEach((taskId) => {

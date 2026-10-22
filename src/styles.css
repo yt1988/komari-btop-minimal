@@ -557,12 +557,11 @@ button {
   white-space: nowrap;
 }
 
-/* Legend under the chart, centred on the plot (the padding matches the y-axis gutter). */
+/* Legend in the top right of the latency heading, as before. */
 .probe-set {
-  gap: 6px 28px;
-  justify-content: center;
-  margin-top: 12px;
-  padding-left: 58px;
+  gap: 6px 24px;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .range,
@@ -945,10 +944,6 @@ button {
     align-items: flex-start;
   }
 
-  .probe-set {
-    flex-basis: 100%;
-  }
-
   .graph {
     height: 240px;
   }
@@ -960,6 +955,13 @@ button {
 }
 
 @media (max-width: 700px) {
+  /* Phones: the legend takes its own row under the title, left-aligned. */
+  .probe-set {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
   .row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-template-areas:
