@@ -9,6 +9,12 @@ export const LATENCY_RANGES = [
   { label: '30d', hours: 720 },
 ] as const;
 
+/** A stored range in hours if it is one of the offered ranges, else null. */
+export function parseLatencyRange(value: unknown): number | null {
+  const hours = Number(value);
+  return LATENCY_RANGES.some((range) => range.hours === hours) ? hours : null;
+}
+
 // Fixed categorical slots validated against the #030805 terminal surface. Status
 // colors remain reserved for node health and are deliberately not used here.
 export const LATENCY_SERIES_COLORS = [

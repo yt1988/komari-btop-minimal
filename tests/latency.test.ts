@@ -7,6 +7,7 @@ import {
   formatLatencyReadout,
   latencyCeiling,
   latencyTicks,
+  parseLatencyRange,
   latencySeriesColor,
   resolveLatencyTargets,
   toggleVisibleTasks,
@@ -160,5 +161,12 @@ describe('latency chart visibility', () => {
     expect(latencyTicks(latencyCeiling([{ timestamp: 0, value: 311 }]))).toEqual([0, 100, 200, 300, 400]);
     expect(latencyCeiling([{ timestamp: 0, value: 650 }])).toBe(800);
     expect(latencyTicks(800)).toEqual([0, 200, 400, 600, 800]);
+  });
+});
+
+describe('stored latency range', () => {
+  it('accepts only the offered ranges', () => {
+    expect(['1', '168', 720].map(parseLatencyRange)).toEqual([1, 168, 720]);
+    expect([null, '', '5', 'abc', '24.5'].map(parseLatencyRange)).toEqual([null, null, null, null, null]);
   });
 });

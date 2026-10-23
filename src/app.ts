@@ -9,7 +9,7 @@ import {
 import type { LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
 import { reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
-import { resolveLatencyTargets, toggleVisibleTasks } from './latency';
+import { parseLatencyRange, resolveLatencyTargets, toggleVisibleTasks } from './latency';
 import {
   parseLatencyColorRegistry,
   reconcileLatencyColors,
@@ -54,6 +54,24 @@ type ApplicationState = {
 };
 
 let nodeMetadataCache: NodeMetadata[] | null = null;
+
+const LATENCY_RANGE_KEY = 'komari-btop-minimal:latency-range:v1';
+
+/** The latency range last picked on any detail page; it applies to every node. */
+function storedLatencyRange(): number {
+  try {
+    return parseLatencyRange(window.localStorage.getItem(LATENCY_RANGE_KEY)) ?? DEFAULT_LATENCY_HOURS;
+  } catch {
+    return DEFAULT_LATENCY_HOURS;
+  }
+}
+
+function storeLatencyRange(hours: number): void {
+  try {
+    window.localStorage.setItem(LATENCY_RANGE_KEY, String(hours));
+  } catch {
+  }
+}
 
 function isNodeMetadata(value: unknown): value is NodeMetadata {
   if (typeof value !== 'object' || value === null) {
@@ -134,7 +152,7 @@ export function startApp(root: HTMLElement): () => void {
     liveConnection: 'connecting',
     route: currentRoute(),
     routeKey: '',
-    latencyRange: DEFAULT_LATENCY_HOURS,
+    latencyRange: storedLatencyRange(),
     latency: null,
     latencyStatus: 'loading',
     visibleTaskIds: null,
@@ -308,7 +326,7 @@ export function startApp(root: HTMLElement): () => void {
     },
     // Hovering a node name warms what its detail page needs first.
     onNodeIntent: (uuid: string) => {
-      latencyCache.prefetch(uuid, DEFAULT_LATENCY_HOURS, LATENCY_REFRESH_MS);
+      latencyCache.prefetch(uuid, state.latencyRange, LATENCY_REFRESH_MS);
       void ensurePingTasks();
     },
   };
@@ -386,6 +404,7 @@ export function startApp(root: HTMLElement): () => void {
             return;
           }
           state.latencyRange = hours;
+          storeLatencyRange(hours);
           loadLatency(detailRoute.uuid, hours);
         },
         onLatencyRetry: () => {
@@ -561,7 +580,6 @@ export function startApp(root: HTMLElement): () => void {
     clearLatencyRefresh();
     latencyRequestId += 1;
     state.latency = null;
-    state.latencyRange = DEFAULT_LATENCY_HOURS;
     state.latencyStatus = 'loading';
     state.visibleTaskIds = null;
     clearStatusRefresh();
