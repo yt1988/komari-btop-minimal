@@ -22,6 +22,7 @@ import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages } from './statusH
 import { setChartOffline } from './views/chart';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
+import { renderNodeSwitcher } from './views/switcher';
 import type { StatusView } from './views/status';
 
 const DEFAULT_LATENCY_HOURS = 24;
@@ -457,12 +458,104 @@ export function startApp(root: HTMLElement): () => void {
     loadLatency(uuid, state.latencyRange);
   };
 
+  // Node switcher on detail pages: the node name toggles it under the name, and a
+  // double click anywhere outside controls and charts opens it at the pointer.
+  let switcher: HTMLElement | null = null;
+
+  const closeSwitcher = (refocus = false): void => {
+    if (!switcher) {
+      return;
+    }
+    switcher.remove();
+    switcher = null;
+    const trigger = page.querySelector<HTMLButtonElement>('[data-role="node-switch"]');
+    trigger?.setAttribute('aria-expanded', 'false');
+    if (refocus) {
+      trigger?.focus();
+    }
+  };
+
+  /** Opens the list with its top-left at a viewport point, flipping above it near the bottom edge. */
+  const openSwitcher = (clientX: number, clientY: number): HTMLElement | null => {
+    if (state.route.type !== 'detail') {
+      return null;
+    }
+    closeSwitcher();
+    const currentUuid = state.route.uuid;
+    const list = renderNodeSwitcher(getNodeStates(), currentUuid, {
+      onSelect: (uuid) => {
+        closeSwitcher();
+        if (uuid !== currentUuid) {
+          navigate({ type: 'detail', uuid });
+        }
+      },
+      onIntent: nodeHandlers.onNodeIntent,
+    });
+    page.append(list);
+    switcher = list;
+    const bounds = page.getBoundingClientRect();
+    const top = clientY + list.offsetHeight <= window.innerHeight - 8 ? clientY : clientY - list.offsetHeight;
+    list.style.left = `${Math.max(0, Math.min(clientX - bounds.left, page.clientWidth - list.offsetWidth))}px`;
+    list.style.top = `${Math.max(0, top - bounds.top)}px`;
+    page.querySelector('[data-role="node-switch"]')?.setAttribute('aria-expanded', 'true');
+    return list;
+  };
+
+  const handlePageClick = (event: MouseEvent): void => {
+    const trigger = event.target instanceof Element ? event.target.closest('[data-role="node-switch"]') : null;
+    if (!trigger) {
+      return;
+    }
+    if (switcher) {
+      closeSwitcher();
+      return;
+    }
+    const anchor = trigger.getBoundingClientRect();
+    const list = openSwitcher(anchor.left, anchor.bottom + 6);
+    // Opened from the keyboard: move focus into the list.
+    if (event.detail === 0) {
+      list?.querySelector<HTMLElement>('.is-current')?.focus();
+    }
+  };
+
+  const isBlankDetailSpot = (target: EventTarget | null): boolean => state.route.type === 'detail'
+    && target instanceof Element
+    && !target.closest('button, a, input, .chart-container, .node-switcher');
+
+  const handlePageMouseDown = (event: MouseEvent): void => {
+    // Keep the double click from selecting a word.
+    if (event.detail > 1 && isBlankDetailSpot(event.target)) {
+      event.preventDefault();
+    }
+  };
+
+  const handlePageDoubleClick = (event: MouseEvent): void => {
+    if (isBlankDetailSpot(event.target)) {
+      window.getSelection()?.removeAllRanges();
+      openSwitcher(event.clientX, event.clientY);
+    }
+  };
+
+  const handleDocumentMouseDown = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (switcher && !switcher.contains(target) && !target?.closest('[data-role="node-switch"]')) {
+      closeSwitcher();
+    }
+  };
+
+  const handleDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && switcher) {
+      closeSwitcher(true);
+    }
+  };
+
   const syncRoute = (): void => {
     const route = currentRoute();
     const key = routeKey(route);
     if (key === state.routeKey) {
       return;
     }
+    closeSwitcher();
     state.route = route;
     state.routeKey = key;
     clearLatencyRefresh();
@@ -604,6 +697,11 @@ export function startApp(root: HTMLElement): () => void {
 
   window.addEventListener('popstate', handleRouteChange);
   window.addEventListener('hashchange', handleRouteChange);
+  page.addEventListener('click', handlePageClick);
+  document.addEventListener('mousedown', handlePageMouseDown);
+  document.addEventListener('dblclick', handlePageDoubleClick);
+  document.addEventListener('mousedown', handleDocumentMouseDown);
+  document.addEventListener('keydown', handleDocumentKeyDown);
   void loadSiteName();
   void refreshMetadata();
   liveSocket = createLiveSocket({
@@ -642,6 +740,11 @@ export function startApp(root: HTMLElement): () => void {
     }
     window.removeEventListener('popstate', handleRouteChange);
     window.removeEventListener('hashchange', handleRouteChange);
+    page.removeEventListener('click', handlePageClick);
+    document.removeEventListener('mousedown', handlePageMouseDown);
+    document.removeEventListener('dblclick', handlePageDoubleClick);
+    document.removeEventListener('mousedown', handleDocumentMouseDown);
+    document.removeEventListener('keydown', handleDocumentKeyDown);
   };
 }
 

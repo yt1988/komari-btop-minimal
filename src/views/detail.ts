@@ -35,9 +35,27 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
   return node;
 }
 
+/**
+ * The node name doubles as the node switcher's trigger (the app handles its
+ * clicks by delegation). It is rebuilt only when the node changes, so live
+ * updates keep its focus.
+ */
 function updateDetailName(container: HTMLElement, node: NodeState | null): void {
-  container.replaceChildren();
-  const code = normalizeRegionCode(node?.metadata.region);
+  const key = node ? `${node.metadata.uuid}|${node.metadata.region}|${node.metadata.name}` : '';
+  if (container.dataset.key === key) {
+    return;
+  }
+  container.dataset.key = key;
+  if (!node) {
+    container.replaceChildren();
+    return;
+  }
+  const button = element('button', 'detail-switch');
+  button.type = 'button';
+  button.dataset.role = 'node-switch';
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
+  const code = normalizeRegionCode(node.metadata.region);
   if (code) {
     const region = element('img', 'detail-flag');
     region.src = regionFlagUrl(code);
@@ -50,11 +68,15 @@ function updateDetailName(container: HTMLElement, node: NodeState | null): void 
       region.dataset.fallback = 'true';
       region.src = regionFlagUrl('');
     });
-    container.append(region);
+    button.append(region);
   }
   const name = element('span', 'detail-name-text');
-  name.textContent = node?.metadata.name ?? '';
-  container.append(name);
+  name.textContent = node.metadata.name;
+  const caret = element('span', 'detail-switch-caret');
+  caret.textContent = '▾';
+  caret.setAttribute('aria-hidden', 'true');
+  button.append(name, caret);
+  container.replaceChildren(button);
 }
 
 function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
