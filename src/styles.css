@@ -213,6 +213,10 @@ button {
   color: #ff7070;
 }
 
+.node-status.pending {
+  color: #178e48;
+}
+
 .node-name {
   overflow: hidden;
   max-width: 100%;

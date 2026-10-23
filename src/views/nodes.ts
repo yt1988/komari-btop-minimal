@@ -90,10 +90,11 @@ function networkCell(node: NodeState): HTMLDivElement {
 
 function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeListHandlers): void {
   const nodeCell = element('div', 'node');
-  const status = element('span', `node-status ${node.online ? 'online' : 'offline'}`);
+  const liveness = !node.live ? 'pending' : node.online ? 'online' : 'offline';
+  const status = element('span', `node-status ${liveness}`);
   status.textContent = '●';
   status.setAttribute('role', 'img');
-  status.setAttribute('aria-label', node.online ? 'online' : 'offline');
+  status.setAttribute('aria-label', liveness);
   const region = regionFlag(node.metadata.region, 'node-flag');
   if (region) {
     nodeCell.append(status, region);

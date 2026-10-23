@@ -1,9 +1,5 @@
-import countryData from 'flag-icons/country.json';
-
 const TAIWAN_NAMES = new Set(['台湾', '臺灣', 'taiwan', 'tw', 'twn', '🇹🇼']);
-const FLAG_CODES = new Set(
-  (countryData as Array<{ code: string }>).map(({ code }) => code.toLowerCase()),
-);
+const FLAG_CODES = new Set(__FLAG_CODES__.split(' '));
 
 const REGION_NAMES = new Map<string, string>([
   ['中国', 'CN'],

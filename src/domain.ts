@@ -38,6 +38,8 @@ export type LiveSnapshot = {
 
 export type NodeState = {
   metadata: NodeMetadata;
+  /** False until the first live snapshot arrives; the node is then neither online nor offline. */
+  live: boolean;
   online: boolean;
   report: LiveReport | null;
   lastReportAt: number | null;

@@ -164,9 +164,13 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
+  // Before the first snapshot nothing is known about liveness. Treating nodes as
+  // online then renders neutral "--" placeholders instead of a red offline flash
+  // over the cached node list; the status dot itself shows the pending state.
   const getNodeStates = (): NodeState[] => state.nodes.map((metadata) => ({
     metadata,
-    online: state.online.has(metadata.uuid),
+    live: state.lastUpdate !== null,
+    online: state.lastUpdate === null || state.online.has(metadata.uuid),
     report: state.reports.get(metadata.uuid) ?? null,
     lastReportAt: state.reports.get(metadata.uuid)?.updatedAt ?? null,
   }));
@@ -452,7 +456,7 @@ export function startApp(root: HTMLElement): () => void {
   const refreshMetadata = async (): Promise<void> => {
     if (nodeMetadataCache === null) {
       try {
-        const cached = window.sessionStorage.getItem('komari-btop-minimal:nodes:v1');
+        const cached = window.localStorage.getItem('komari-btop-minimal:nodes:v1');
         const parsed: unknown = cached ? JSON.parse(cached) : null;
         if (Array.isArray(parsed) && parsed.every(isNodeMetadata)) {
           nodeMetadataCache = parsed;
@@ -484,7 +488,7 @@ export function startApp(root: HTMLElement): () => void {
       state.nodes = nodes;
       nodeMetadataCache = nodes;
       try {
-        window.sessionStorage.setItem('komari-btop-minimal:nodes:v1', JSON.stringify(nodes));
+        window.localStorage.setItem('komari-btop-minimal:nodes:v1', JSON.stringify(nodes));
       } catch {
       }
       state.metadataFailed = false;
@@ -545,6 +549,11 @@ export function startApp(root: HTMLElement): () => void {
       }
     }
 
+    if (!hadSnapshot) {
+      // Every node leaves the pending state at once, including ones with no report.
+      render();
+      return;
+    }
     if (reconciled.changedUuids.size === 0) {
       return;
     }

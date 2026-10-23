@@ -21,7 +21,8 @@ export function renderStatusButton(button: HTMLButtonElement, node: NodeState | 
   button.className = `detail-status ${node?.online ? 'ok' : 'danger'}`;
   // Hovering or focusing the status reveals the outage list; without one it is plain text.
   button.disabled = (view.outages?.length ?? 0) === 0;
-  button.hidden = node === null;
+  // Liveness is unknown until the first snapshot, so the status stays hidden until then.
+  button.hidden = node === null || !node.live;
   if (!node) {
     button.replaceChildren();
     return;
