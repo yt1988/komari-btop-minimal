@@ -48,7 +48,15 @@ export type LatencyChartOptions = {
 const LANE_HEIGHT = 5;
 const LANE_GAP = 4;
 
+const offlineSetters = new WeakMap<HTMLElement, (intervals: readonly OfflineInterval[]) => void>();
+
+/** Redraws a rendered chart's offline bands in place, keeping any hover readout. */
+export function setChartOffline(container: HTMLElement, intervals: readonly OfflineInterval[]): void {
+  offlineSetters.get(container)?.(intervals);
+}
+
 export function renderLatencyChart(container: HTMLElement, options: LatencyChartOptions): void {
+  offlineSetters.delete(container);
   container.replaceChildren();
   const series = (options.query?.series ?? []).filter((item) => options.visibleTaskIds.includes(item.taskId));
   const points = series.flatMap((item) => item.points);
@@ -111,17 +119,24 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   });
   graph.append(grid);
 
-  const offline = (options.offline ?? []).filter((interval) => interval.end > start && interval.start < end);
-  for (const interval of offline) {
-    const band = svgElement('rect');
-    band.classList.add('offline-band');
-    const x = toX(Math.max(start, interval.start));
-    band.setAttribute('x', x.toFixed(3));
-    band.setAttribute('y', '0');
-    band.setAttribute('width', Math.max(1, toX(Math.min(end, interval.end)) - x).toFixed(3));
-    band.setAttribute('height', '280');
-    graph.append(band);
-  }
+  const offlineBands = svgElement('g');
+  graph.append(offlineBands);
+  let offline: OfflineInterval[] = [];
+  const drawOffline = (intervals: readonly OfflineInterval[]): void => {
+    offline = intervals.filter((interval) => interval.end > start && interval.start < end);
+    offlineBands.replaceChildren(...offline.map((interval) => {
+      const band = svgElement('rect');
+      band.classList.add('offline-band');
+      const x = toX(Math.max(start, interval.start));
+      band.setAttribute('x', x.toFixed(3));
+      band.setAttribute('y', '0');
+      band.setAttribute('width', Math.max(1, toX(Math.min(end, interval.end)) - x).toFixed(3));
+      band.setAttribute('height', '280');
+      return band;
+    }));
+  };
+  drawOffline(options.offline ?? []);
+  offlineSetters.set(container, drawOffline);
 
   const crosshair = svgElement('line');
   crosshair.classList.add('cross');

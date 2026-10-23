@@ -502,6 +502,15 @@ button {
   height: 180px;
 }
 
+/* Reserve the chart's height while it loads so the page below does not jump. */
+.latency > .chart-container {
+  min-height: 300px;
+}
+
+.latency-overflow-chart {
+  min-height: 200px;
+}
+
 .latency-heading {
   display: flex;
   flex-wrap: wrap;
@@ -950,6 +959,10 @@ button {
 
   .graph {
     height: 240px;
+  }
+
+  .latency > .chart-container {
+    min-height: 260px;
   }
 
   .powered {

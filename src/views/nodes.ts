@@ -6,6 +6,8 @@ import { renderTrafficCell } from './traffic';
 export type NodeListHandlers = {
   onGroupSelect: (group: string) => void;
   onNodeSelect: (uuid: string) => void;
+  /** A pointer or focus resting on a node name; used to prefetch its detail data. */
+  onNodeIntent?: (uuid: string) => void;
 };
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
@@ -105,6 +107,17 @@ function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeLis
   name.type = 'button';
   name.textContent = node.metadata.name;
   name.addEventListener('click', () => handlers.onNodeSelect(node.metadata.uuid));
+  // A pointer or focus resting on the name for 150ms prefetches the detail page's data.
+  let intent: ReturnType<typeof setTimeout> | undefined;
+  const startIntent = (): void => {
+    clearTimeout(intent);
+    intent = setTimeout(() => handlers.onNodeIntent?.(node.metadata.uuid), 150);
+  };
+  const cancelIntent = (): void => clearTimeout(intent);
+  name.addEventListener('pointerenter', startIntent);
+  name.addEventListener('focus', startIntent);
+  name.addEventListener('pointerleave', cancelIntent);
+  name.addEventListener('blur', cancelIntent);
   nodeCell.append(name);
 
   const report = node.report;

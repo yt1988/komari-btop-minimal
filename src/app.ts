@@ -17,10 +17,15 @@ import {
   type NodeLatencyColorRegistry,
 } from './latencyColors';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
+import { createLatencyCache } from './latencyCache';
 import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages } from './statusHistory';
+import { setChartOffline } from './views/chart';
 import { renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
 import type { StatusView } from './views/status';
+
+const DEFAULT_LATENCY_HOURS = 24;
+const LATENCY_REFRESH_MS = 60_000;
 
 type LatencyStatus = 'loading' | 'ready' | 'error';
 type LiveConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'stopped';
@@ -128,7 +133,7 @@ export function startApp(root: HTMLElement): () => void {
     liveConnection: 'connecting',
     route: currentRoute(),
     routeKey: '',
-    latencyRange: 24,
+    latencyRange: DEFAULT_LATENCY_HOURS,
     latency: null,
     latencyStatus: 'loading',
     visibleTaskIds: null,
@@ -139,7 +144,7 @@ export function startApp(root: HTMLElement): () => void {
   let statusRequestId = 0;
   let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let statusCoarseAt = 0;
-  let latencyController: AbortController | null = null;
+  const latencyCache = createLatencyCache((uuid, hours) => fetchLatency(uuid, hours));
   let latencyRequestId = 0;
   let latencyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let metadataController: AbortController | null = null;
@@ -208,6 +213,14 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
+  // Records arrive after the chart, so only the status and the charts' offline
+  // bands change; redrawing the charts would drop an in-progress hover readout.
+  const applyOutages = (): void => {
+    updateCore();
+    const outages = getStatusView(getCurrentNode()).outages ?? [];
+    page.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, outages));
+  };
+
   const clearStatusRefresh = (): void => {
     if (statusRefreshTimer !== null) {
       clearTimeout(statusRefreshTimer);
@@ -239,7 +252,7 @@ export function startApp(root: HTMLElement): () => void {
       }
       state.statusFine = fine;
       state.statusCoarse = coarse;
-      render();
+      applyOutages();
       statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 120_000);
     }).catch((error: unknown) => {
       const aborted = error instanceof DOMException && error.name === 'AbortError';
@@ -291,6 +304,11 @@ export function startApp(root: HTMLElement): () => void {
     },
     onNodeSelect: (uuid: string) => {
       navigate({ type: 'detail', uuid });
+    },
+    // Hovering a node name warms what its detail page needs first.
+    onNodeIntent: (uuid: string) => {
+      latencyCache.prefetch(uuid, DEFAULT_LATENCY_HOURS, LATENCY_REFRESH_MS);
+      void ensurePingTasks();
     },
   };
 
@@ -389,37 +407,54 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
-  const loadLatency = (uuid: string, hours: number): void => {
+  /**
+   * Shows cached data for the node and range at once when there is any, then
+   * refreshes it; `refresh` skips the cache for the periodic update.
+   */
+  const loadLatency = (uuid: string, hours: number, refresh = false): void => {
     clearLatencyRefresh();
-    latencyController?.abort();
     const requestId = ++latencyRequestId;
-    const controller = new AbortController();
-    latencyController = controller;
-    state.latencyStatus = state.latency === null ? 'loading' : 'ready';
-    if (state.latency === null) {
+    const current = (): boolean => !stopped && requestId === latencyRequestId
+      && state.route.type === 'detail' && state.route.uuid === uuid && state.latencyRange === hours;
+    const cached = refresh ? null : latencyCache.peek(uuid, hours);
+    if (cached) {
+      state.latency = cached.query;
+      state.latencyStatus = 'ready';
+      render();
+      if (cached.ageMs < LATENCY_REFRESH_MS) {
+        latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), LATENCY_REFRESH_MS - cached.ageMs);
+        return;
+      }
+    } else if (state.latency === null) {
+      state.latencyStatus = 'loading';
       render();
     }
-    void fetchLatency(uuid, hours, controller.signal).then((query) => {
-      if (stopped || requestId !== latencyRequestId || state.route.type !== 'detail' || state.route.uuid !== uuid || state.latencyRange !== hours) {
+    void latencyCache.fetch(uuid, hours).then((query) => {
+      if (!current()) {
         return;
       }
       state.latency = query;
       state.latencyStatus = 'ready';
       render();
-      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours), 60_000);
-    }).catch((error: unknown) => {
-      const aborted = error instanceof DOMException && error.name === 'AbortError';
-      if (stopped || requestId !== latencyRequestId || aborted) {
+      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), LATENCY_REFRESH_MS);
+    }).catch(() => {
+      if (!current()) {
         return;
       }
-      state.latencyStatus = 'error';
-      render();
-      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours), 15_000);
-    }).finally(() => {
-      if (latencyController === controller) {
-        latencyController = null;
+      // Keep showing data that is already on screen; only an empty chart turns into an error.
+      if (state.latency === null) {
+        state.latencyStatus = 'error';
+        render();
       }
+      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), 15_000);
     });
+  };
+
+  /** Starts everything a detail page needs; nothing waits on the node list, the uuid comes from the URL. */
+  const startDetailLoads = (uuid: string): void => {
+    loadStatusRecords(uuid);
+    void ensurePingTasks();
+    loadLatency(uuid, state.latencyRange);
   };
 
   const syncRoute = (): void => {
@@ -431,10 +466,9 @@ export function startApp(root: HTMLElement): () => void {
     state.route = route;
     state.routeKey = key;
     clearLatencyRefresh();
-    latencyController?.abort();
-    latencyController = null;
+    latencyRequestId += 1;
     state.latency = null;
-    state.latencyRange = 24;
+    state.latencyRange = DEFAULT_LATENCY_HOURS;
     state.latencyStatus = 'loading';
     state.visibleTaskIds = null;
     clearStatusRefresh();
@@ -443,11 +477,7 @@ export function startApp(root: HTMLElement): () => void {
     state.statusFine = null;
     state.statusCoarse = null;
     if (route.type === 'detail') {
-      loadStatusRecords(route.uuid);
-    }
-    if (route.type === 'detail' && state.metadataReady && state.nodes.some((node) => node.uuid === route.uuid)) {
-      void ensurePingTasks();
-      loadLatency(route.uuid, state.latencyRange);
+      startDetailLoads(route.uuid);
       return;
     }
     render();
@@ -469,11 +499,6 @@ export function startApp(root: HTMLElement): () => void {
       state.nodes = nodeMetadataCache;
       state.metadataReady = true;
       render();
-      const cachedRoute = state.route;
-      if (cachedRoute.type === 'detail' && state.nodes.some((node) => node.uuid === cachedRoute.uuid)) {
-        void ensurePingTasks();
-        loadLatency(cachedRoute.uuid, state.latencyRange);
-      }
     }
 
     metadataController?.abort();
@@ -509,12 +534,6 @@ export function startApp(root: HTMLElement): () => void {
     state.metadataReady = true;
     if (state.selectedGroup !== 'all' && !state.nodes.some((node) => node.group.trim() === state.selectedGroup)) {
       state.selectedGroup = 'all';
-    }
-    const route = state.route;
-    if (route.type === 'detail' && state.nodes.some((node) => node.uuid === route.uuid) && latencyController === null && state.latency === null) {
-      void ensurePingTasks();
-      loadLatency(route.uuid, state.latencyRange);
-      return;
     }
     render();
   };
@@ -602,7 +621,7 @@ export function startApp(root: HTMLElement): () => void {
   metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
   if (state.route.type === 'detail') {
     state.routeKey = routeKey(state.route);
-    loadStatusRecords(state.route.uuid);
+    startDetailLoads(state.route.uuid);
   } else {
     state.routeKey = 'nodes';
     render();
@@ -612,7 +631,6 @@ export function startApp(root: HTMLElement): () => void {
     stopped = true;
     clearLatencyRefresh();
     clearStatusRefresh();
-    latencyController?.abort();
     statusController?.abort();
     metadataController?.abort();
     liveSocket?.stop();

@@ -3,7 +3,7 @@ import type { LatencyQuery, NodeState } from '../domain';
 import { LATENCY_RANGES, latencySeriesColor, latencyStats } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
-import { renderLatencyChart } from './chart';
+import { renderLatencyChart, setChartOffline } from './chart';
 import { renderStatusButton, renderStatusPanel, type StatusView } from './status';
 import { renderTrafficCell } from './traffic';
 
@@ -142,14 +142,36 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null,
   appendMetricRow(row, node);
 }
 
+const renderedLatency = new WeakMap<HTMLElement, { query: LatencyQuery | null; key: string }>();
+
+/** Everything besides the query object that shapes the latency section. */
+function latencySignature(options: DetailOptions): string {
+  return JSON.stringify([
+    options.latencyState,
+    options.latencyRange,
+    options.visibleTaskIds,
+    [...options.targets],
+    [...options.colorAssignments],
+    options.overflowTaskIds,
+  ]);
+}
+
 export function renderDetailView(container: HTMLElement, options: DetailOptions): void {
   // Periodic redraws keep the same node's core in place, so hovering or focusing
   // the status (which reveals the outage list) survives them; only the rest is rebuilt.
   const key = options.node?.metadata.uuid ?? '';
   let section = container.querySelector<HTMLElement>(':scope > section.detail');
   const existingCore = section?.querySelector<HTMLElement>(':scope > .detail-core') ?? null;
+  const latencyKey = latencySignature(options);
   if (section && existingCore && existingCore.dataset.node === key) {
     updateDetailCore(existingCore, options.node, options.status);
+    // Redraws triggered by live data, the node list or task names leave the latency
+    // inputs unchanged; keep the charts so a hover readout is not interrupted.
+    const kept = renderedLatency.get(section);
+    if (options.node && kept && kept.query === options.latency && kept.key === latencyKey) {
+      section.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, options.status.outages ?? []));
+      return;
+    }
     while (existingCore.nextSibling) {
       existingCore.nextSibling.remove();
     }
@@ -286,5 +308,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   });
 
   section.append(latencySection);
+  renderedLatency.set(section, { query: options.latency, key: latencyKey });
 }
 
