@@ -88,6 +88,7 @@ export function createTrafficCell(className = 'traffic') {
       const label = chinese ? chineseLabel : english;
       if (rule.textContent !== icon) {
         rule.textContent = icon;
+        rule.classList.toggle('traffic-rule-word', icon === 'MIN' || icon === 'MAX');
         rule.setAttribute('aria-label', label);
         description.textContent = label;
       }

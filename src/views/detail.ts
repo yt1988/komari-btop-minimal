@@ -4,6 +4,7 @@ import { LATENCY_RANGES, latencySeriesColor, latencyStats } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import { createTrafficCell } from './traffic';
+import { createMetricMenu } from './metricMenu';
 import { renderLatencyChart, setChartOffline } from './chart';
 import { renderStatusButton, renderStatusPanel, type StatusView } from './status';
 
@@ -25,7 +26,6 @@ export type DetailOptions = {
   historyState: 'loading' | 'ready' | 'error';
   historyRange: number;
   displayedHistoryRange: number | null;
-  chinese: boolean;
   visibleTaskIds: string[];
   colorAssignments: LatencyColorAssignment;
   overflowTaskIds: string[];
@@ -190,27 +190,11 @@ function createHistoryView(options: DetailOptions) {
   const section = element('section', 'latency');
   const heading = element('div', 'latency-heading');
   const controls = element('div', 'latency-left');
-  const choice = element('label', 'history-metric-control');
-  const selector = element('select', 'history-metric');
-  selector.setAttribute('aria-label', options.chinese ? '图表指标' : 'Chart metric');
-  const labels: Record<HistoryMetric, string> = {
-    latency: options.chinese ? '延迟' : 'latency',
-    cpu: 'CPU',
-    mem: 'MEM',
-    network: 'NETWORK',
-  };
-  for (const [metric, label] of Object.entries(labels)) {
-    const option = element('option');
-    option.value = metric;
-    option.textContent = label;
-    selector.append(option);
-  }
-  selector.addEventListener('change', () => options.handlers.onMetricChange(selector.value as HistoryMetric));
-  choice.append(selector);
+  const metricMenu = createMetricMenu(options.handlers.onMetricChange);
 
   const ranges = element('div', 'range-set');
   ranges.setAttribute('role', 'group');
-  ranges.setAttribute('aria-label', options.chinese ? '时间范围' : 'History range');
+  ranges.setAttribute('aria-label', 'History range');
   const rangeButtons = LATENCY_RANGES.map((range) => {
     const button = element('button', 'range');
     button.type = 'button';
@@ -219,13 +203,21 @@ function createHistoryView(options: DetailOptions) {
     ranges.append(button);
     return { hours: range.hours, button };
   });
-  controls.append(choice, ranges);
+  controls.append(metricMenu.element, ranges);
   heading.append(controls);
   section.append(heading);
-  return { section, heading, selector, rangeButtons, query: null as LatencyQuery | null, key: '' };
+  return { section, heading, metricMenu, rangeButtons, query: null as LatencyQuery | null, key: '' };
 }
 
-const historyViews = new WeakMap<HTMLElement, ReturnType<typeof createHistoryView>>();
+const historyViews = new WeakMap<Element, ReturnType<typeof createHistoryView>>();
+
+export function dismissMetricMenuOutside(container: HTMLElement, target: EventTarget | null): void {
+  const section = container.firstElementChild;
+  const view = section && historyViews.get(section);
+  if (view && target instanceof Node && !view.metricMenu.element.contains(target)) {
+    view.metricMenu.close();
+  }
+}
 
 /** Everything besides the query object that shapes the chart. */
 function historySignature(options: DetailOptions): string {
@@ -277,10 +269,10 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
 
   const resource = options.metric !== 'latency' ? options.metric : undefined;
   const taskLabels = resource === 'cpu' ? new Map([['cpu.usage', 'CPU']])
-    : resource === 'mem' ? new Map([['memory.used', options.chinese ? '已用内存' : 'Memory used']])
+    : resource === 'mem' ? new Map([['memory.used', 'Memory used']])
     : resource === 'network' ? new Map([
-      ['net.in.rate', options.chinese ? '↓ 下载' : '↓ download'],
-      ['net.out.rate', options.chinese ? '↑ 上传' : '↑ upload'],
+      ['net.in.rate', '↓ Download'],
+      ['net.out.rate', '↑ Upload'],
     ]) : new Map(options.targets);
   const colors = resource ? new Map([
     ['cpu.usage', '#35f477'],
@@ -296,11 +288,9 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     historyViews.set(section, historyView);
     section.append(historyView.section);
   }
-  const { section: latencySection, heading, selector, rangeButtons } = historyView;
+  const { section: latencySection, heading, metricMenu, rangeButtons } = historyView;
   // Keep the controls mounted across range changes and periodic chart refreshes.
-  if (selector.value !== options.metric) {
-    selector.value = options.metric;
-  }
+  metricMenu.update(options.metric);
   for (const { hours, button } of rangeButtons) {
     const selected = options.historyRange === hours;
     button.classList.toggle('active', selected);
@@ -366,18 +356,16 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     const status = element('div', `chart-message ${failed ? 'danger' : 'muted'}`);
     const label = element('span');
     label.setAttribute('role', failed ? 'alert' : 'status');
-    label.textContent = options.chinese
-      ? (failed ? `${requested} 加载失败` : `正在加载 ${requested}`)
-      : (failed ? `unable to load ${requested}` : `loading ${requested}`);
+    label.textContent = failed ? `unable to load ${requested}` : `loading ${requested}`;
     if (displayedRange !== null) {
       const shown = rangeLabel(displayedRange);
-      label.append(options.chinese ? ` · 当前显示 ${shown}` : ` · showing ${shown}`);
+      label.append(` · showing ${shown}`);
     }
     status.append(label);
     if (failed) {
       const retry = element('button', 'retry');
       retry.type = 'button';
-      retry.textContent = options.chinese ? '重试' : 'retry';
+      retry.textContent = 'retry';
       retry.addEventListener('click', options.handlers.onHistoryRetry);
       status.append(' ', retry);
     }
@@ -391,7 +379,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
       colorAssignments: colors,
       labels: taskLabels,
       rangeHours: displayedRange,
-      chinese: options.chinese,
       probeIntervals: options.probeIntervals,
       offline: options.status.outages ?? [],
       resource,
@@ -419,7 +406,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
         colorAssignments: new Map([[taskId, latencySeriesColor(taskId)]]) as LatencyColorAssignment,
         labels: taskLabels,
         rangeHours: displayedRange,
-        chinese: options.chinese,
         probeIntervals: options.probeIntervals,
         offline: options.status.outages ?? [],
       });

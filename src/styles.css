@@ -2,6 +2,7 @@
   --duplex-column: 12.5ch;
   --duplex-gap: 8px;
   --traffic-progress-width: 12ch;
+  --traffic-rule-word-size: 7px;
   color-scheme: dark;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 14px;
@@ -123,6 +124,9 @@ button {
 .range.active,
 .probe.active {
   color: #35f477;
+}
+
+.filter.active {
   font-weight: 800;
 }
 
@@ -331,7 +335,8 @@ button {
 }
 
 .traffic-rule-button {
-  min-width: 3ch;
+  display: block;
+  width: 100%;
   border: 0;
   padding: 0;
   background: none;
@@ -339,6 +344,10 @@ button {
   text-align: left;
   line-height: 15px;
   cursor: pointer;
+}
+
+.traffic-rule-word {
+  font-size: var(--traffic-rule-word-size);
 }
 
 .traffic-rule-button:hover {
@@ -642,7 +651,7 @@ button {
   flex-wrap: wrap;
   align-items: center;
   gap: 12px 24px;
-  margin-bottom: 12px;
+  margin-bottom: 22px;
 }
 
 .latency-left {
@@ -654,33 +663,68 @@ button {
 
 .history-metric-control {
   position: relative;
-  display: inline-flex;
-  align-items: center;
+  flex: none;
 }
 
-.history-metric-control::after {
-  position: absolute;
-  right: 0;
-  color: #178e48;
-  content: '▾';
-  pointer-events: none;
-}
-
-.history-metric {
-  appearance: none;
-  min-width: 0;
+.history-metric,
+.history-metric-option {
   border: 0;
-  padding: 0 1.3em 0 0;
-  background: transparent;
+  background: none;
   color: #35f477;
   font: inherit;
-  font-weight: 700;
+  font-weight: 400;
   cursor: pointer;
 }
 
-.history-metric:focus-visible {
-  outline: 1px dashed currentColor;
-  outline-offset: 3px;
+.history-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 10ch;
+  padding: 0;
+}
+
+.history-metric-caret {
+  color: #178e48;
+}
+
+.history-metric:focus-visible,
+.history-metric-option:focus-visible {
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.history-metric-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  padding: 4px 0;
+  background: #09170f;
+  box-shadow: 0 6px 16px #0009;
+}
+
+.history-metric-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  text-align: left;
+}
+
+.history-metric-option:hover,
+.history-metric-option:focus {
+  background: #0d3a20;
+}
+
+.history-metric-option[aria-checked='true']::after {
+  color: #35f477;
+  content: '✓';
 }
 
 .range-set,

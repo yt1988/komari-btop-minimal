@@ -25,7 +25,6 @@ export type LatencyChartOptions = {
   labels: Map<string, string>;
   rangeHours: number;
   resource?: ResourceMetric;
-  chinese?: boolean;
   probeIntervals?: ReadonlyMap<string, number>;
   offline?: readonly OfflineInterval[];
   /** Targets that get a loss lane, hidden ones included so the height never changes. */
@@ -51,7 +50,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   if (points.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'chart-message muted';
-    empty.textContent = options.resource ? (options.chinese ? '暂无历史数据' : 'no history records') : 'no latency records';
+    empty.textContent = options.resource ? 'no history records' : 'no latency records';
     container.append(empty);
     return;
   }
@@ -325,9 +324,9 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       swatch.style.backgroundColor = options.colorAssignments.get(entry.taskId) ?? latencySeriesColor(entry.taskId, options.allTaskIds);
       swatch.setAttribute('aria-hidden', 'true');
       const reading = entry.loss === 1
-        ? (options.chinese ? '100% 丢包' : '100% loss')
+        ? '100% loss'
         : entry.value === null
-          ? (options.chinese ? '无采样' : 'no sample')
+          ? 'no sample'
           : formatValue(entry.value);
       value.append(swatch, document.createTextNode(`${entry.label} ${reading}`));
       if (entry.value !== null && entry.loss !== null && entry.loss > 0) {

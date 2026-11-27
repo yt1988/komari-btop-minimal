@@ -23,7 +23,7 @@ import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route
 import { createLatencyCache } from './latencyCache';
 import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages } from './statusHistory';
 import { setChartOffline } from './views/chart';
-import { renderDetailView, updateDetailCore } from './views/detail';
+import { dismissMetricMenuOutside, renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
 import { renderNodeSwitcher } from './views/switcher';
 import type { StatusView } from './views/status';
@@ -449,7 +449,6 @@ export function startApp(root: HTMLElement): () => void {
       historyState: state.historyStatus,
       historyRange: state.historyRange,
       displayedHistoryRange: state.displayedHistoryRange,
-      chinese,
       visibleTaskIds: visible,
       colorAssignments: colorPlan.assignments,
       overflowTaskIds: colorPlan.overflowTaskIds,
@@ -622,6 +621,10 @@ export function startApp(root: HTMLElement): () => void {
       window.getSelection()?.removeAllRanges();
       openSwitcher(event.clientX, event.clientY);
     }
+  };
+
+  const handleMetricPointerDown = (event: PointerEvent): void => {
+    dismissMetricMenuOutside(page, event.target);
   };
 
   const handleDocumentMouseDown = (event: MouseEvent): void => {
@@ -820,6 +823,7 @@ export function startApp(root: HTMLElement): () => void {
   page.addEventListener('click', handlePageClick);
   document.addEventListener('mousedown', handlePageMouseDown);
   document.addEventListener('dblclick', handlePageDoubleClick);
+  document.addEventListener('pointerdown', handleMetricPointerDown);
   document.addEventListener('mousedown', handleDocumentMouseDown);
   document.addEventListener('keydown', handleDocumentKeyDown);
   void loadSiteName();
@@ -855,6 +859,7 @@ export function startApp(root: HTMLElement): () => void {
     page.removeEventListener('click', handlePageClick);
     document.removeEventListener('mousedown', handlePageMouseDown);
     document.removeEventListener('dblclick', handlePageDoubleClick);
+    document.removeEventListener('pointerdown', handleMetricPointerDown);
     document.removeEventListener('mousedown', handleDocumentMouseDown);
     document.removeEventListener('keydown', handleDocumentKeyDown);
   };
