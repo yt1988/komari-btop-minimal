@@ -1,7 +1,8 @@
 :root {
   --duplex-column: 12.5ch;
   --duplex-gap: 8px;
-  --direction-slot: calc(1ch + 6px);
+  --direction-arrow-width: 1ch;
+  --direction-slot: calc(var(--direction-arrow-width) + 6px);
   --traffic-progress-width: 80px;
   --traffic-rule-word-size: 7px;
   color-scheme: dark;
@@ -287,7 +288,7 @@ button {
 }
 
 .direction-arrow {
-  width: 1ch;
+  width: var(--direction-arrow-width);
   text-align: center;
 }
 
@@ -329,69 +330,25 @@ button {
   line-height: 1;
 }
 
-.traffic-rule,
-.traffic-limit .limit-text {
-  font-size: 11px;
-}
-
 .traffic-rule {
-  position: relative;
-  min-width: 0;
+  display: flex;
+  justify-content: center;
+  width: var(--direction-arrow-width);
 }
 
-.traffic-rule-button {
-  display: block;
-  width: 100%;
-  border: 0;
-  padding: 0;
-  background: none;
-  color: inherit;
-  text-align: left;
-  line-height: 15px;
-  cursor: pointer;
+.traffic-rule-symbol {
+  font-size: 11px;
 }
 
 .traffic-rule-word {
   font-size: var(--traffic-rule-word-size);
 }
 
-.traffic-rule-button:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.traffic-rule-button:focus-visible {
-  outline: 1px dashed currentColor;
-  outline-offset: 2px;
-}
-
-.traffic-rule-description {
-  display: none;
-  position: absolute;
-  z-index: 3;
-  left: 0;
-  bottom: calc(100% + 4px);
-  padding: 5px 7px;
-  border: 1px solid #178e48;
-  background: #030805;
-  color: #35f477;
-  white-space: nowrap;
-}
-
-.traffic-rule:not(.is-dismissed):has(.traffic-rule-button:focus-visible, .traffic-rule-button[aria-expanded='true']) .traffic-rule-description {
-  display: block;
-}
-
-@media (hover: hover) {
-  .traffic-rule:not(.is-dismissed):hover .traffic-rule-description {
-    display: block;
-  }
-}
-
 .traffic-limit .limit-text {
   margin-inline-start: 6px;
   min-width: max-content;
   overflow: visible;
+  font-size: 11px;
   text-overflow: clip;
   white-space: nowrap;
 }
@@ -1176,6 +1133,15 @@ button {
 }
 
 @media (max-width: 700px) {
+  .table-scroll,
+  .metric-table {
+    /* Allow a centered MIN or MAX to extend past the arrow column. */
+    width: auto;
+    max-width: none;
+    margin-inline-start: -4px;
+    padding-inline-start: 4px;
+  }
+
   /* Phones: the legend takes its own row under the title, left-aligned. */
   .probe-set {
     flex-basis: 100%;

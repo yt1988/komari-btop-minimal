@@ -31,35 +31,16 @@ export function createTrafficCell(className = 'traffic') {
   });
 
   const limitRow = element('div', 'traffic-limit');
-  const hint = element('span', 'traffic-rule');
-  const rule = element('button', 'traffic-rule-button');
-  rule.type = 'button';
-  rule.setAttribute('aria-expanded', 'false');
-  const description = element('span', 'traffic-rule-description');
-  description.setAttribute('aria-hidden', 'true');
-  rule.addEventListener('click', () => {
-    const open = rule.getAttribute('aria-expanded') !== 'true';
-    hint.classList.toggle('is-dismissed', !open);
-    rule.setAttribute('aria-expanded', String(open));
-  });
-  hint.addEventListener('pointerleave', () => hint.classList.remove('is-dismissed'));
-  rule.addEventListener('blur', () => {
-    hint.classList.remove('is-dismissed');
-    rule.setAttribute('aria-expanded', 'false');
-  });
-  rule.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      hint.classList.add('is-dismissed');
-      rule.setAttribute('aria-expanded', 'false');
-    }
-  });
-  hint.append(rule, description);
+  const rule = element('span', 'traffic-rule');
+  rule.setAttribute('role', 'img');
+  const symbol = element('span', 'traffic-rule-symbol');
+  rule.append(symbol);
 
   const track = element('span', 'limit-track');
   const fill = element('span', 'limit-fill');
   track.append(fill);
   const usage = element('span', 'limit-text');
-  limitRow.append(hint, track, usage);
+  limitRow.append(rule, track, usage);
   cell.append(current, limitRow);
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
 
@@ -82,15 +63,13 @@ export function createTrafficCell(className = 'traffic') {
       const empty = !display.limited || display.used === null;
       const tone = empty ? 'is-empty' : !node.online ? 'danger' : display.tone === 'warning' ? 'warn' : '';
       limitRow.className = `traffic-limit ${tone}`;
-      rule.tabIndex = empty ? -1 : 0;
       const [icon, english, chineseLabel] = mode === 'sum' || mode === 'up' || mode === 'down' || mode === 'min'
         ? rules[mode] : rules.max;
       const label = chinese ? chineseLabel : english;
-      if (rule.textContent !== icon) {
-        rule.textContent = icon;
-        rule.classList.toggle('traffic-rule-word', icon === 'MIN' || icon === 'MAX');
+      if (symbol.textContent !== icon) {
+        symbol.textContent = icon;
+        symbol.classList.toggle('traffic-rule-word', icon === 'MIN' || icon === 'MAX');
         rule.setAttribute('aria-label', label);
-        description.textContent = label;
       }
       fill.style.width = `${display.ratio * 100}%`;
       usage.textContent = `${formatTraffic(display.used)} / ${formatTraffic(display.limit)}`;
