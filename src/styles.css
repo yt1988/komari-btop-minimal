@@ -240,9 +240,11 @@ button {
   cursor: pointer;
 }
 
-.row:hover .node-name {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+@media (hover: hover) {
+  .node-name:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
 }
 
 .resource {
