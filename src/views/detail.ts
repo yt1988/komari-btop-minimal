@@ -84,14 +84,10 @@ function updateDetailName(container: HTMLElement, node: NodeState | null): void 
   container.replaceChildren(button);
 }
 
-function createMetricRow(onMetricChange: DetailHandlers['onMetricChange']) {
+function createMetricRow() {
   const row = element('div', 'metric-row');
   const cpu = element('div', 'metric metric-cpu');
   cpu.dataset.mobileLabel = 'CPU';
-  const cpuButton = element('button', 'trend-link');
-  cpuButton.type = 'button';
-  cpuButton.addEventListener('click', () => onMetricChange('cpu'));
-  cpu.append(cpuButton);
 
   const memory = element('div', 'metric metric-mem');
   memory.dataset.mobileLabel = 'MEM';
@@ -100,15 +96,13 @@ function createMetricRow(onMetricChange: DetailHandlers['onMetricChange']) {
   const network = element('div', 'metric metric-network');
   network.dataset.mobileLabel = 'NETWORK';
   const directions = (['down', 'up'] as const).map((direction) => {
-    const button = element('button', 'direction trend-link');
-    button.type = 'button';
-    button.addEventListener('click', () => onMetricChange('network'));
+    const item = element('span', 'direction');
     const arrow = element('span', 'direction-arrow');
     arrow.textContent = direction === 'down' ? '↓' : '↑';
     const text = element('span', 'direction-value');
-    button.append(arrow, text);
-    network.append(button);
-    return { direction, button, text };
+    item.append(arrow, text);
+    network.append(item);
+    return { direction, item, text };
   });
   const traffic = createTrafficCell('metric metric-traffic traffic');
   row.append(cpu, memory, disk, network, traffic.cell);
@@ -119,17 +113,15 @@ function createMetricRow(onMetricChange: DetailHandlers['onMetricChange']) {
       const report = node.report;
       const tone = (value: boolean, warning = false) => !node.online ? 'danger' : !value ? 'muted' : warning ? 'warn' : 'ok';
       cpu.className = `metric metric-cpu ${tone(report?.cpuUsage != null, metricTone(report?.cpuUsage) === 'warning')}`;
-      cpuButton.textContent = formatPercent(report?.cpuUsage);
-      cpuButton.setAttribute('aria-label', `CPU history, ${cpuButton.textContent}`);
+      cpu.textContent = formatPercent(report?.cpuUsage);
       memory.className = `metric metric-mem ${tone(!!report?.ram)}`;
       memory.textContent = report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--';
       disk.className = `metric metric-disk ${tone(!!report?.disk)}`;
       disk.textContent = report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--';
-      for (const { direction, button, text } of directions) {
+      for (const { direction, item, text } of directions) {
         const value = report?.network?.[direction];
-        button.className = `direction trend-link ${tone(value != null, networkTone(value) === 'warning')}`;
+        item.className = `direction ${tone(value != null, networkTone(value) === 'warning')}`;
         text.textContent = formatSpeed(value);
-        button.setAttribute('aria-label', `Network history, ${direction === 'down' ? 'download' : 'upload'} ${text.textContent}`);
       }
       traffic.update(node);
     },
@@ -170,7 +162,7 @@ function renderCore(container: HTMLElement, node: NodeState | null, view: Status
   const rowContainer = element('div', 'metric-row-container');
   table.append(heading, rowContainer);
   if (node) {
-    const metrics = createMetricRow(handlers.onMetricChange);
+    const metrics = createMetricRow();
     metricRows.set(rowContainer, metrics);
     metrics.update(node);
     rowContainer.append(metrics.row);
@@ -194,10 +186,49 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null,
   }
 }
 
-const renderedLatency = new WeakMap<HTMLElement, { query: LatencyQuery | null; key: string }>();
+function createHistoryView(options: DetailOptions) {
+  const section = element('section', 'latency');
+  const heading = element('div', 'latency-heading');
+  const controls = element('div', 'latency-left');
+  const choice = element('label', 'history-metric-control');
+  const selector = element('select', 'history-metric');
+  selector.setAttribute('aria-label', options.chinese ? '图表指标' : 'Chart metric');
+  const labels: Record<HistoryMetric, string> = {
+    latency: options.chinese ? '延迟' : 'latency',
+    cpu: 'CPU',
+    mem: 'MEM',
+    network: 'NETWORK',
+  };
+  for (const [metric, label] of Object.entries(labels)) {
+    const option = element('option');
+    option.value = metric;
+    option.textContent = label;
+    selector.append(option);
+  }
+  selector.addEventListener('change', () => options.handlers.onMetricChange(selector.value as HistoryMetric));
+  choice.append(selector);
 
-/** Everything besides the query object that shapes the latency section. */
-function latencySignature(options: DetailOptions): string {
+  const ranges = element('div', 'range-set');
+  ranges.setAttribute('role', 'group');
+  ranges.setAttribute('aria-label', options.chinese ? '时间范围' : 'History range');
+  const rangeButtons = LATENCY_RANGES.map((range) => {
+    const button = element('button', 'range');
+    button.type = 'button';
+    button.textContent = range.label;
+    button.addEventListener('click', () => options.handlers.onRangeChange(range.hours));
+    ranges.append(button);
+    return { hours: range.hours, button };
+  });
+  controls.append(choice, ranges);
+  heading.append(controls);
+  section.append(heading);
+  return { section, heading, selector, rangeButtons, query: null as LatencyQuery | null, key: '' };
+}
+
+const historyViews = new WeakMap<HTMLElement, ReturnType<typeof createHistoryView>>();
+
+/** Everything besides the query object that shapes the chart. */
+function historySignature(options: DetailOptions): string {
   return JSON.stringify([
     options.metric,
     options.historyState,
@@ -217,18 +248,15 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   const key = options.node?.metadata.uuid ?? '';
   let section = container.querySelector<HTMLElement>(':scope > section.detail');
   const existingCore = section?.querySelector<HTMLElement>(':scope > .detail-core') ?? null;
-  const latencyKey = latencySignature(options);
+  const historyKey = historySignature(options);
   if (section && existingCore && existingCore.dataset.node === key) {
     updateDetailCore(existingCore, options.node, options.status);
     // Redraws triggered by live data, the node list or task names leave the latency
     // inputs unchanged; keep the charts so a hover readout is not interrupted.
-    const kept = renderedLatency.get(section);
-    if (options.node && kept && kept.query === options.history && kept.key === latencyKey) {
+    const kept = historyViews.get(section);
+    if (options.node && kept && kept.query === options.history && kept.key === historyKey) {
       section.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, options.status.outages ?? []));
       return;
-    }
-    while (existingCore.nextSibling) {
-      existingCore.nextSibling.remove();
     }
   } else {
     section = element('section', 'detail');
@@ -240,6 +268,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   }
 
   if (!options.node) {
+    section.querySelector(':scope > .empty-state')?.remove();
     const missing = element('div', 'empty-state danger');
     missing.textContent = 'node not found';
     section.append(missing);
@@ -248,43 +277,39 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
 
   const resource = options.metric !== 'latency' ? options.metric : undefined;
   const taskLabels = resource === 'cpu' ? new Map([['cpu.usage', 'CPU']])
+    : resource === 'mem' ? new Map([['memory.used', options.chinese ? '已用内存' : 'Memory used']])
     : resource === 'network' ? new Map([
       ['net.in.rate', options.chinese ? '↓ 下载' : '↓ download'],
       ['net.out.rate', options.chinese ? '↑ 上传' : '↑ upload'],
     ]) : new Map(options.targets);
   const colors = resource ? new Map([
     ['cpu.usage', '#35f477'],
+    ['memory.used', '#35f477'],
     ['net.in.rate', '#56aaff'],
     ['net.out.rate', '#ffc45b'],
   ]) : options.colorAssignments;
   const taskIds = [...taskLabels.keys()];
 
-  const latencySection = element('section', 'latency');
-  const heading = element('div', 'latency-heading');
-  const title = element('h2', 'latency-title');
-  title.textContent = resource === 'cpu' ? 'CPU' : resource === 'network' ? 'network' : 'latency';
-  const chooseLatency = element('button', 'range');
-  chooseLatency.type = 'button';
-  chooseLatency.textContent = options.chinese ? '延迟' : 'latency';
-  chooseLatency.addEventListener('click', () => options.handlers.onMetricChange('latency'));
-
-  const controls = element('div', 'latency-left');
-  const ranges = element('div', 'range-set');
-  ranges.setAttribute('role', 'group');
-  ranges.setAttribute('aria-label', resource ? 'History range' : 'Latency range');
-  LATENCY_RANGES.forEach((range) => {
-    const button = element('button', `range${options.historyRange === range.hours ? ' active' : ''}`);
-    button.type = 'button';
-    button.textContent = range.label;
-    button.setAttribute('aria-pressed', String(options.historyRange === range.hours));
-    button.addEventListener('click', () => options.handlers.onRangeChange(range.hours));
-    ranges.append(button);
-  });
-  controls.append(title, ranges);
-  if (resource) {
-    controls.append(chooseLatency);
+  let historyView = historyViews.get(section);
+  if (!historyView) {
+    historyView = createHistoryView(options);
+    historyViews.set(section, historyView);
+    section.append(historyView.section);
   }
-  heading.append(controls);
+  const { section: latencySection, heading, selector, rangeButtons } = historyView;
+  // Keep the controls mounted across range changes and periodic chart refreshes.
+  if (selector.value !== options.metric) {
+    selector.value = options.metric;
+  }
+  for (const { hours, button } of rangeButtons) {
+    const selected = options.historyRange === hours;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  heading.querySelector(':scope > .probe-set')?.remove();
+  while (heading.nextElementSibling) {
+    heading.nextElementSibling.remove();
+  }
 
   const probes = element('div', 'probe-set');
   probes.setAttribute('role', 'group');
@@ -330,7 +355,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     probes.append(button);
   });
   heading.append(probes);
-  latencySection.append(heading);
 
   const chart = element('div', 'chart-container');
   chart.dataset.role = resource ? 'resource-chart' : 'latency-chart';
@@ -404,7 +428,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     latencySection.append(overflow);
   });
 
-  section.append(latencySection);
-  renderedLatency.set(section, { query: options.history, key: latencyKey });
+  historyView.query = options.history;
+  historyView.key = historyKey;
 }
 

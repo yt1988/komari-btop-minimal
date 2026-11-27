@@ -18,10 +18,11 @@ describe('clean browser routes', () => {
     expect(legacyRoutePath('#')).toBe('/');
   });
 
-  it('round-trips a resource history link alongside the existing node route', () => {
-    const route = { type: 'detail', uuid: 'node/1', metric: 'network' } as const;
-    expect(routePath(route)).toBe('/nodes/node%2F1?metric=network');
-    expect(parseRoute('/nodes/node%2F1', '', '?metric=network')).toEqual(route);
+  it.each(['cpu', 'mem', 'network'] as const)('round-trips a %s history link', (metric) => {
+    const route = { type: 'detail', uuid: 'node/1', metric } as const;
+    const path = routePath(route);
+    expect(path).toBe(`/nodes/node%2F1?metric=${metric}`);
+    expect(parseRoute('/nodes/node%2F1', '', `?metric=${metric}`)).toEqual(route);
     expect(parseRoute('/nodes/node%2F1', '', '?metric=unknown')).toEqual({ type: 'detail', uuid: 'node/1' });
   });
 

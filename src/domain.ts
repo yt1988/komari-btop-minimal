@@ -66,7 +66,7 @@ export type LatencyPoint = {
   samples?: number | null;
 };
 
-export type ResourceMetric = 'cpu' | 'network';
+export type ResourceMetric = 'cpu' | 'mem' | 'network';
 export type HistoryMetric = 'latency' | ResourceMetric;
 
 export type LatencySeries = {

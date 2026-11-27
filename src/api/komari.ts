@@ -303,7 +303,11 @@ async function queryMetrics(
 }
 
 export async function fetchResourceHistory(uuid: string, hours: number, metric: ResourceMetric): Promise<LatencyQuery> {
-  const keys = metric === 'cpu' ? ['cpu.usage'] : ['net.in.rate', 'net.out.rate'];
+  const keys = {
+    cpu: ['cpu.usage'],
+    mem: ['memory.used'],
+    network: ['net.in.rate', 'net.out.rate'],
+  }[metric];
   return parseLatencyQuery(await queryMetrics(uuid, hours, { metric_keys: keys }, 'avg'), 'resource');
 }
 

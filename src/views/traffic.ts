@@ -32,7 +32,7 @@ export function createTrafficCell(className = 'traffic') {
 
   const limitRow = element('div', 'traffic-limit');
   const hint = element('span', 'traffic-rule');
-  const rule = element('button', 'traffic-rule-button trend-link');
+  const rule = element('button', 'traffic-rule-button');
   rule.type = 'button';
   rule.setAttribute('aria-expanded', 'false');
   const description = element('span', 'traffic-rule-description');

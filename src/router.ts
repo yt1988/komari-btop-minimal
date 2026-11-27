@@ -35,7 +35,7 @@ export function parseRoute(pathname: string, hash = '', search = ''): Route {
   }
   const route = parsePath(pathname) ?? hashRoute ?? { type: 'nodes' };
   const metric = new URLSearchParams(search).get('metric');
-  return route.type === 'detail' && (metric === 'cpu' || metric === 'network') ? { ...route, metric } : route;
+  return route.type === 'detail' && (metric === 'cpu' || metric === 'mem' || metric === 'network') ? { ...route, metric } : route;
 }
 
 export function routePath(route: Route): string {

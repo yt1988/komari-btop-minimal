@@ -1,4 +1,4 @@
-import { formatLoss, formatSpeed } from '../format';
+import { formatBytes, formatLoss, formatSpeed } from '../format';
 import type { LatencyQuery, LatencySeries, ResourceMetric } from '../domain';
 import {
   buildLatencyRuns,
@@ -63,21 +63,24 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   const timeSpan = Math.max(1, end - start);
   // The ceiling leaves room for the top of each spread band.
   const peak = points.reduce((max, point) => Math.max(max, point.value ?? 0), 0);
-  const speedStep = Math.max(1024, 2 ** Math.ceil(Math.log2(peak / 4)));
-  const ceiling = options.resource === 'cpu' ? 100 : options.resource === 'network' ? speedStep * 4
+  const byteStep = Math.max(1024, 2 ** Math.ceil(Math.log2(peak / 4)));
+  const ceiling = options.resource === 'cpu' ? 100 : options.resource ? byteStep * 4
     : latencyCeiling(points.map((point) => ({
       ...point,
       value: point.value === null ? null : point.value + (point.spread ?? 0),
     })));
   const ticks = options.resource ? [0, ceiling / 4, ceiling / 2, ceiling * 3 / 4, ceiling] : latencyTicks(ceiling);
   const formatValue = options.resource === 'cpu' ? (value: number) => `${Number(value.toFixed(1))}%`
+    : options.resource === 'mem' ? formatBytes
     : options.resource === 'network' ? formatSpeed
     : (value: number) => `${value.toFixed(1)}ms`;
-  const chartName = options.resource === 'cpu' ? 'CPU history' : options.resource === 'network' ? 'Network history' : 'Latency chart';
+  const chartName = options.resource === 'cpu' ? 'CPU history'
+    : options.resource === 'mem' ? 'Memory history'
+    : options.resource === 'network' ? 'Network history' : 'Latency chart';
   const toX = (timestamp: number): number => (timestamp - start) / timeSpan * 1000;
   const toY = (value: number): number => 280 - Math.min(ceiling, value) / ceiling * 280;
   const stage = document.createElement('div');
-  stage.className = options.resource === 'network' ? 'graph-wrap network-graph' : 'graph-wrap';
+  stage.className = options.resource === 'network' || options.resource === 'mem' ? 'graph-wrap byte-graph' : 'graph-wrap';
 
   const graphArea = document.createElement('div');
   graphArea.className = 'graph-area';

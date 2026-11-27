@@ -9,7 +9,7 @@ import {
   isAccessDenied,
   type LiveSocketStatus,
 } from './api/komari';
-import type { HistoryMetric, LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask, ResourceMetric } from './domain';
+import type { HistoryMetric, LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
 import { reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
 import { parseLatencyRange, resolveLatencyTargets, toggleVisibleTasks } from './latency';
@@ -151,7 +151,7 @@ export function startApp(root: HTMLElement): () => void {
     liveConnection: 'connecting',
     route: initialRoute,
     routeKey: '',
-    historyRange: initialRoute.type === 'detail' && initialRoute.metric ? 1 : storedLatencyRange(),
+    historyRange: storedLatencyRange(),
     history: null,
     displayedHistoryRange: null,
     historyStatus: 'loading',
@@ -166,6 +166,7 @@ export function startApp(root: HTMLElement): () => void {
   const newHistoryCaches = () => ({
     latency: createLatencyCache(fetchLatency),
     cpu: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'cpu')),
+    mem: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'mem')),
     network: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'network')),
   });
   let historyCaches = newHistoryCaches();
@@ -352,20 +353,14 @@ export function startApp(root: HTMLElement): () => void {
     onNodeSelect: (uuid: string) => {
       navigate({ type: 'detail', uuid });
     },
-    onTrendSelect: (uuid: string, metric: ResourceMetric) => {
-      navigate({ type: 'detail', uuid, metric });
-    },
     // Hovering a node name warms what its detail page needs first.
     onNodeIntent: (uuid: string) => {
       if (state.metadataStatus !== 'ready') {
         return;
       }
-      const metric = state.route.type === 'detail' ? state.route.metric ?? 'latency' : 'latency';
       const hours = state.route.type === 'detail' ? state.historyRange : storedLatencyRange();
-      historyCaches[metric].prefetch(uuid, hours, HISTORY_REFRESH_MS);
-      if (metric === 'latency') {
-        void ensurePingTasks();
-      }
+      historyCaches.latency.prefetch(uuid, hours, HISTORY_REFRESH_MS);
+      void ensurePingTasks();
     },
   };
 
@@ -468,12 +463,12 @@ export function startApp(root: HTMLElement): () => void {
           }
         },
         onRangeChange: (hours) => {
-          if (state.historyRange === hours) {
+          if (state.route.type !== 'detail' || state.historyRange === hours) {
             return;
           }
           state.historyRange = hours;
           storeLatencyRange(hours);
-          loadHistory(detailRoute.uuid, detailRoute.metric ?? 'latency', hours);
+          loadHistory(state.route.uuid, state.route.metric ?? 'latency', hours);
         },
         onHistoryRetry: () => {
           loadHistory(detailRoute.uuid, detailRoute.metric ?? 'latency', state.historyRange, true);
@@ -574,12 +569,12 @@ export function startApp(root: HTMLElement): () => void {
       return null;
     }
     closeSwitcher();
-    const { uuid: currentUuid, metric } = state.route;
+    const currentUuid = state.route.uuid;
     const list = renderNodeSwitcher(getNodeStates(), currentUuid, {
       onSelect: (uuid) => {
         closeSwitcher();
         if (uuid !== currentUuid) {
-          navigate({ type: 'detail', uuid, metric });
+          navigate({ type: 'detail', uuid });
         }
       },
       onIntent: nodeHandlers.onNodeIntent,
@@ -613,7 +608,7 @@ export function startApp(root: HTMLElement): () => void {
 
   const isBlankDetailSpot = (target: EventTarget | null): boolean => state.route.type === 'detail'
     && target instanceof Element
-    && !target.closest('button, a, input, .chart-container, .node-switcher');
+    && !target.closest('button, a, input, select, .chart-container, .node-switcher');
 
   const handlePageMouseDown = (event: MouseEvent): void => {
     // Keep the double click from selecting a word.
@@ -653,7 +648,7 @@ export function startApp(root: HTMLElement): () => void {
     state.route = route;
     state.routeKey = key;
     if (route.type === 'detail' && previousRoute.type === 'nodes') {
-      state.historyRange = route.metric ? 1 : storedLatencyRange();
+      state.historyRange = storedLatencyRange();
     }
     clearHistoryRefresh();
     historyRequestId += 1;

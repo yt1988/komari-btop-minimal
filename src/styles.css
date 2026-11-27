@@ -249,25 +249,6 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.trend-link {
-  border: 0;
-  padding: 0;
-  background: none;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.trend-link:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.trend-link:focus-visible {
-  outline: 1px dashed currentColor;
-  outline-offset: 2px;
-}
-
 .resource-bar {
   color: #35f477;
   font-size: 14px;
@@ -351,8 +332,23 @@ button {
 
 .traffic-rule-button {
   min-width: 3ch;
-  text-align: center;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
   line-height: 15px;
+  cursor: pointer;
+}
+
+.traffic-rule-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.traffic-rule-button:focus-visible {
+  outline: 1px dashed currentColor;
+  outline-offset: 2px;
 }
 
 .traffic-rule-description {
@@ -656,11 +652,35 @@ button {
   gap: 12px 24px;
 }
 
-.latency-title {
-  margin: 0;
+.history-metric-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.history-metric-control::after {
+  position: absolute;
+  right: 0;
+  color: #178e48;
+  content: '▾';
+  pointer-events: none;
+}
+
+.history-metric {
+  appearance: none;
+  min-width: 0;
+  border: 0;
+  padding: 0 1.3em 0 0;
+  background: transparent;
   color: #35f477;
   font: inherit;
   font-weight: 700;
+  cursor: pointer;
+}
+
+.history-metric:focus-visible {
+  outline: 1px dashed currentColor;
+  outline-offset: 3px;
 }
 
 .range-set,
@@ -717,7 +737,7 @@ button {
   padding-left: 58px;
 }
 
-.network-graph {
+.byte-graph {
   padding-left: 80px;
 }
 
