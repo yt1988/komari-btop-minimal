@@ -31,6 +31,7 @@ export function createTrafficCell(className = 'traffic') {
   });
 
   const limitRow = element('div', 'traffic-limit');
+  const progress = element('span', 'traffic-progress');
   const rule = element('span', 'traffic-rule');
   rule.setAttribute('role', 'img');
   const symbol = element('span', 'traffic-rule-symbol');
@@ -40,7 +41,8 @@ export function createTrafficCell(className = 'traffic') {
   const fill = element('span', 'limit-fill');
   track.append(fill);
   const usage = element('span', 'limit-text');
-  limitRow.append(rule, track, usage);
+  progress.append(rule, track);
+  limitRow.append(progress, usage);
   cell.append(current, limitRow);
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
 

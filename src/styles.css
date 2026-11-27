@@ -3,7 +3,6 @@
   --duplex-gap: 8px;
   --direction-arrow-width: 1ch;
   --direction-slot: calc(var(--direction-arrow-width) + 6px);
-  --traffic-progress-width: 80px;
   --traffic-rule-word-size: 7px;
   color-scheme: dark;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
@@ -279,7 +278,8 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.direction {
+.direction,
+.traffic-progress {
   display: grid;
   grid-template-columns: var(--direction-slot) minmax(0, 1fr);
   align-items: center;
@@ -299,8 +299,9 @@ button {
 }
 
 .traffic {
+  --traffic-columns: minmax(0, var(--duplex-column)) minmax(0, 1fr);
   display: grid;
-  grid-template-rows: 18px 15px;
+  grid-template-rows: 18px minmax(15px, max-content);
   gap: 2px;
   min-height: 35px;
   white-space: nowrap;
@@ -309,25 +310,20 @@ button {
 
 .traffic-current,
 .traffic-limit {
+  display: grid;
+  grid-template-columns: var(--traffic-columns);
+  column-gap: var(--duplex-gap);
   min-width: 0;
 }
 
-.traffic-current {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, var(--duplex-column)));
-  gap: var(--duplex-gap);
-  justify-content: start;
+.traffic-limit {
+  align-items: center;
+  color: #35f477;
+  line-height: 1.2;
 }
 
-.traffic-limit {
-  display: grid;
-  grid-template-columns: var(--direction-slot) minmax(0, var(--traffic-progress-width)) max-content;
-  align-items: center;
-  width: 100%;
-  max-width: 100%;
-  row-gap: 6px;
-  color: #35f477;
-  line-height: 1;
+.traffic-progress {
+  padding-inline-end: 6px;
 }
 
 .traffic-rule {
@@ -345,12 +341,10 @@ button {
 }
 
 .traffic-limit .limit-text {
-  margin-inline-start: 6px;
-  min-width: max-content;
-  overflow: visible;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 11px;
-  text-overflow: clip;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .traffic-limit.is-empty {
@@ -1033,19 +1027,11 @@ button {
   }
 
   .traffic {
+    --traffic-columns: repeat(2, minmax(0, 1fr));
     grid-area: traffic;
-    grid-template-rows: 13px 18px 15px;
+    grid-template-rows: 13px 18px minmax(15px, max-content);
     gap: 3px;
     min-height: 49px;
-  }
-
-  .traffic-current {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--duplex-gap);
-  }
-
-  .traffic-limit {
-    width: 100%;
   }
 
   .detail-control {
@@ -1091,12 +1077,6 @@ button {
 
   .metric-disk {
     grid-area: disk;
-  }
-
-  .metric-network,
-  .metric-traffic .traffic-current {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--duplex-gap);
   }
 
   .metric-network {
@@ -1181,22 +1161,6 @@ button {
   .resource-bar {
     font-size: 12px;
     letter-spacing: -0.02em;
-  }
-
-  .traffic {
-    grid-template-rows: 13px 18px auto;
-  }
-
-  .traffic-limit {
-    grid-template-columns: var(--direction-slot) minmax(0, 1fr);
-  }
-
-  .traffic-limit .limit-text {
-    grid-column: 2;
-    margin-inline-start: 0;
-    min-width: 0;
-    overflow-wrap: anywhere;
-    white-space: normal;
   }
 
   .chart-readout {
