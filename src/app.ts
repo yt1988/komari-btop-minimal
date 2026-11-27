@@ -33,11 +33,10 @@ const HISTORY_REFRESH_MS = 60_000;
 const LIVE_REFRESH_MS = 3000;
 const LIVE_STALE_MS = 3 * LIVE_REFRESH_MS;
 const HIDDEN_SOCKET_GRACE_MS = 30_000;
-const QUICK_RESUME_MS = 10_000;
 const METADATA_REFRESH_MS = 60_000;
 
 type HistoryStatus = 'loading' | 'ready' | 'error';
-type MetadataStatus = 'loading' | 'ready' | 'error' | 'denied';
+type MetadataStatus = 'loading' | 'ready' | 'denied';
 
 type ApplicationState = {
   nodes: NodeMetadata[];
@@ -144,7 +143,7 @@ export function startApp(root: HTMLElement): () => void {
   accessRetry.type = 'button';
   accessRetry.className = 'retry';
   accessMessage.append(accessText, ' ', accessRetry);
-  page.before(accessMessage);
+
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
   accessRetry.textContent = chinese ? '重新连接' : 'Reconnect';
   const startedAt = Date.now();
@@ -175,10 +174,10 @@ export function startApp(root: HTMLElement): () => void {
   let metadataByUuid = new Map<string, NodeMetadata>();
   const knownOnlineState = new Set<string>();
   let foreground = false;
-  let verifying = true;
   let accessRetryAt = 0;
   let accessVerifiedAt: number | null = null;
-  let quickResumeAt: number | null = null;
+  let foregroundAt = 0;
+  let renderedRouteKey: string | null = null;
   let lastTick = Date.now();
   let hiddenAt: number | null = null;
   let socketCloseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -293,7 +292,7 @@ export function startApp(root: HTMLElement): () => void {
    * most every 10 minutes.
    */
   const loadStatusRecords = (uuid: string): void => {
-    if (!foreground || verifying || !metadataByUuid.has(uuid)) return;
+    if (!foreground || state.metadataStatus !== 'ready' || !metadataByUuid.has(uuid)) return;
     clearStatusRefresh();
     statusController?.abort();
     const requestId = ++statusRequestId;
@@ -353,19 +352,18 @@ export function startApp(root: HTMLElement): () => void {
   };
   let wasStale = false;
 
-  const recentlyVerified = (now: number): boolean => !verifying && state.metadataStatus === 'ready'
-    && accessVerifiedAt !== null && now >= accessVerifiedAt && now - accessVerifiedAt < METADATA_REFRESH_MS;
-
-  const justResumed = (now: number, interval: number): boolean => quickResumeAt !== null
-    && now >= quickResumeAt && now - quickResumeAt < interval;
+  const metadataRefreshDelay = (now: number): number => {
+    if (accessVerifiedAt === null || now < accessVerifiedAt) return 0;
+    return Math.max(0, accessVerifiedAt + METADATA_REFRESH_MS - now);
+  };
 
   const updateLiveConnection = (status: LiveSocketStatus): void => {
     const previous = state.liveConnection;
     state.liveConnection = status;
-    if (foreground && !verifying && status === 'reconnecting' && previous !== 'reconnecting') {
+    if (foreground && state.metadataStatus === 'ready' && status === 'reconnecting' && previous !== 'reconnecting') {
       announce('reconnecting live telemetry');
       const now = Date.now();
-      if (state.metadataStatus === 'ready' && !(justResumed(now, QUICK_RESUME_MS) && recentlyVerified(now))) {
+      if (now - foregroundAt >= LIVE_REFRESH_MS || metadataRefreshDelay(now) === 0) {
         void refreshMetadata();
       }
     }
@@ -376,7 +374,6 @@ export function startApp(root: HTMLElement): () => void {
     metadataController?.abort();
     metadataController = null;
     metadataRequestId += 1;
-    verifying = false;
     accessVerifiedAt = null;
     state.metadataStatus = 'denied';
     clearSessionData();
@@ -410,7 +407,7 @@ export function startApp(root: HTMLElement): () => void {
     },
     // Hovering a node name warms what its detail page needs first.
     onNodeIntent: (uuid: string) => {
-      if (!foreground || verifying || historyPending || state.metadataStatus !== 'ready' || !metadataByUuid.has(uuid)) return;
+      if (!foreground || historyPending || state.metadataStatus !== 'ready' || !metadataByUuid.has(uuid)) return;
       const hours = state.route.type === 'detail' ? state.historyRange : storedLatencyRange();
       historyCaches.latency.prefetch(uuid, hours, HISTORY_REFRESH_MS, recheckAccess);
       void ensurePingTasks();
@@ -456,25 +453,20 @@ export function startApp(root: HTMLElement): () => void {
   const render = (): void => {
     state.route = currentRoute();
     updateTimestamp();
-    if (!foreground || verifying) return;
-    if (!accessMessage.hidden) accessMessage.hidden = true;
-    if (page.hidden) page.hidden = false;
-    if (state.metadataStatus !== 'ready') {
-      const status = state.metadataStatus;
+    if (!foreground || state.metadataStatus === 'loading') return;
+    renderedRouteKey = routeKey(state.route);
+    if (state.metadataStatus === 'denied') {
       const message = document.createElement('div');
-      message.className = `empty-state ${status === 'loading' ? 'muted' : 'danger'}`;
-      message.setAttribute('role', status === 'loading' ? 'status' : 'alert');
-      message.textContent = status === 'denied'
-        ? (chinese ? '请登录，或获取新的分享链接。当前分享可能已失效。' : 'Sign in or get a new share link. Your current link may have expired.')
-        : status === 'error' ? 'unable to load nodes' : 'loading nodes';
-      if (status !== 'loading') {
-        const retry = document.createElement('button');
-        retry.type = 'button';
-        retry.className = 'retry';
-        retry.textContent = chinese ? '重试' : 'retry';
-        retry.addEventListener('click', () => void refreshMetadata());
-        message.append(' ', retry);
-      }
+      message.className = 'empty-state danger';
+      message.setAttribute('role', 'alert');
+      message.textContent = chinese ? '请登录，或获取新的分享链接。当前分享可能已失效。'
+        : 'Sign in or get a new share link. Your current link may have expired.';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'retry';
+      retry.textContent = chinese ? '重试' : 'retry';
+      retry.addEventListener('click', () => void refreshMetadata(true));
+      message.append(' ', retry);
       page.replaceChildren(message);
       return;
     }
@@ -563,7 +555,7 @@ export function startApp(root: HTMLElement): () => void {
    * refreshes it; `refresh` skips the cache for the periodic update.
    */
   const loadHistory = (uuid: string, metric: HistoryMetric, hours: number, refresh = false): void => {
-    if (!foreground || verifying || !metadataByUuid.has(uuid)) return;
+    if (!foreground || state.metadataStatus !== 'ready' || !metadataByUuid.has(uuid)) return;
     cancelHistory(metric, uuid, hours);
     const requestId = historyRequestId;
     const current = (): boolean => !stopped && requestId === historyRequestId
@@ -637,7 +629,7 @@ export function startApp(root: HTMLElement): () => void {
 
   /** Opens the list with its top-left at a viewport point, flipping above it near the bottom edge. */
   const openSwitcher = (clientX: number, clientY: number): HTMLElement | null => {
-    if (!foreground || verifying || state.metadataStatus !== 'ready' || state.route.type !== 'detail') return null;
+    if (!foreground || state.metadataStatus !== 'ready' || state.route.type !== 'detail') return null;
     closeSwitcher();
     const currentUuid = state.route.uuid;
     const list = renderNodeSwitcher(getNodeStates(), currentUuid, {
@@ -696,6 +688,7 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const handleMetricPointerDown = (event: PointerEvent): void => {
+    if (event.isTrusted && !foreground) resumeForeground(true);
     dismissMetricMenuOutside(page, event.target);
   };
 
@@ -707,6 +700,7 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const handleDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (event.isTrusted && !foreground) resumeForeground(true);
     if (event.key === 'Escape' && switcher) {
       closeSwitcher(true);
     }
@@ -733,7 +727,7 @@ export function startApp(root: HTMLElement): () => void {
     state.displayedHistoryRange = null;
     state.historyStatus = 'loading';
     if (route.type === 'detail' && previousRoute.type === 'detail' && route.uuid === previousRoute.uuid) {
-      if (foreground && !verifying && state.metadataStatus === 'ready' && metadataByUuid.has(route.uuid)) {
+      if (foreground && state.metadataStatus === 'ready' && metadataByUuid.has(route.uuid)) {
         loadRouteHistory(route);
       } else {
         render();
@@ -748,7 +742,7 @@ export function startApp(root: HTMLElement): () => void {
     state.statusFine = null;
     state.statusCoarse = null;
     outageHistory = createOutageHistory();
-    if (route.type === 'detail' && foreground && !verifying && state.metadataStatus === 'ready') {
+    if (route.type === 'detail' && foreground && state.metadataStatus === 'ready') {
       startDetailLoads(route);
     }
     render();
@@ -805,17 +799,20 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const refreshMetadata = async (immediate = false): Promise<void> => {
-    if (!foreground || metadataController || (!immediate && verifying && Date.now() < accessRetryAt)) return;
-    if (verifying) showAccessCheck('checking');
+    if (!foreground || metadataController) return;
+    if (state.metadataStatus === 'loading') {
+      if (!immediate && Date.now() < accessRetryAt) return;
+      showStartupStatus('checking');
+    }
     const controller = new AbortController();
     metadataController = controller;
     const requestId = ++metadataRequestId;
     try {
       const nodes = await fetchNodeMetadata(controller.signal);
       if (stopped || requestId !== metadataRequestId) return;
-      const resuming = verifying || state.metadataStatus !== 'ready';
+      const initialAccess = state.metadataStatus !== 'ready';
       const changed = JSON.stringify(state.nodes) !== JSON.stringify(nodes);
-      if (resuming || changed) {
+      if (initialAccess || changed) {
         const allowed = new Set(nodes.map(({ uuid }) => uuid));
         for (const uuid of latencyColorRegistry.keys()) {
           if (!allowed.has(uuid)) latencyColorRegistry.delete(uuid);
@@ -855,20 +852,16 @@ export function startApp(root: HTMLElement): () => void {
           state.selectedGroup = 'all';
         }
       }
-      verifying = false;
       state.metadataStatus = 'ready';
       accessVerifiedAt = Date.now();
-      if (resuming || changed) render();
-      if (resuming || !liveSocket) resumeLiveSocket();
-      if ((resuming || changed) && state.route.type === 'detail') startDetailLoads(state.route);
+      if (initialAccess || changed) render();
+      if (initialAccess || !liveSocket) resumeLiveSocket();
+      if ((initialAccess || changed) && state.route.type === 'detail') startDetailLoads(state.route);
     } catch (error: unknown) {
       if (stopped || requestId !== metadataRequestId || recheckAccess(error)) return;
-      if (verifying) {
+      if (state.metadataStatus === 'loading') {
         accessRetryAt = Date.now() + LIVE_REFRESH_MS;
-        showAccessCheck('retrying');
-      } else if (state.metadataStatus === 'loading') {
-        state.metadataStatus = 'error';
-        render();
+        showStartupStatus('retrying');
       }
     } finally {
       if (metadataController === controller) metadataController = null;
@@ -876,7 +869,7 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const applySnapshot = (snapshot: LiveSnapshot, uuid: string | undefined): void => {
-    if (!foreground || verifying) return;
+    if (!foreground || state.metadataStatus !== 'ready') return;
     const changedUuids = new Set<string>();
     let onlineChangedUuids: Set<string>;
     const hadSnapshot = state.lastUpdate !== null;
@@ -953,9 +946,9 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
-  const showAccessCheck = (phase: 'paused' | 'checking' | 'retrying'): void => {
-    page.hidden = true;
-    accessMessage.hidden = false;
+  const showStartupStatus = (phase: 'paused' | 'checking' | 'retrying'): void => {
+    if (state.metadataStatus !== 'loading') return;
+    if (page.firstElementChild !== accessMessage) page.replaceChildren(accessMessage);
     accessRetry.hidden = phase === 'checking';
     const message = phase === 'paused'
       ? (chinese ? '更新已暂停，返回后自动连接。' : 'Updates paused. Reconnecting when you return.')
@@ -992,8 +985,7 @@ export function startApp(root: HTMLElement): () => void {
     if (!foreground) return;
     foreground = false;
     hiddenAt = Date.now();
-    showAccessCheck('paused');
-    closeSwitcher();
+    showStartupStatus('paused');
     if (refreshTimer !== null) clearInterval(refreshTimer);
     if (metadataTimer !== null) clearTimeout(metadataTimer);
     if (timestampTimer !== null) clearInterval(timestampTimer);
@@ -1003,28 +995,28 @@ export function startApp(root: HTMLElement): () => void {
     if (liveSocket) socketCloseTimer = setTimeout(stopLiveSocket, HIDDEN_SOCKET_GRACE_MS);
   };
 
-  const revalidateForeground = (): void => {
-    verifying = true;
-    accessRetryAt = 0;
-    quickResumeAt = null;
-    lastTick = Date.now();
+  const restartLiveUpdates = (): void => {
+    suspendRequests();
+    stopLiveSocket();
     updateTimestamp();
-    liveSocket?.pause();
-    void refreshMetadata();
+    if (state.metadataStatus === 'ready') {
+      resumeLiveSocket();
+      if (state.route.type === 'detail') startDetailLoads(state.route);
+    }
+    void refreshMetadata(true);
   };
 
   const tick = (): void => {
     const now = Date.now();
     const delayed = now - lastTick >= LIVE_STALE_MS;
     lastTick = now;
-    if (delayed && !verifying && navigator.onLine && state.metadataStatus === 'ready') {
-      suspendRequests();
-      stopLiveSocket();
-      revalidateForeground();
+    if (state.metadataStatus === 'loading') {
+      void refreshMetadata();
       return;
     }
-    if (verifying) {
-      void refreshMetadata();
+    if (state.metadataStatus !== 'ready') return;
+    if (delayed && navigator.onLine) {
+      restartLiveUpdates();
       return;
     }
     liveSocket?.request();
@@ -1042,22 +1034,25 @@ export function startApp(root: HTMLElement): () => void {
   const resumeForeground = (userRequested = false): void => {
     if (foreground || (!userRequested && document.hidden) || stopped) return;
     const now = Date.now();
-    const hiddenFor = hiddenAt === null ? Infinity : now - hiddenAt;
-    if (hiddenFor >= HIDDEN_SOCKET_GRACE_MS) stopLiveSocket();
+    const metadataDueIn = metadataRefreshDelay(now);
+    if (metadataDueIn === 0 || (hiddenAt !== null && now - hiddenAt >= HIDDEN_SOCKET_GRACE_MS)) {
+      stopLiveSocket();
+    }
     if (socketCloseTimer !== null) clearTimeout(socketCloseTimer);
     socketCloseTimer = null;
     foreground = true;
+    foregroundAt = lastTick = now;
     void loadSiteName();
-    const verifiedAt = accessVerifiedAt;
-    if (verifiedAt !== null && hiddenFor >= 0 && hiddenFor < QUICK_RESUME_MS && recentlyVerified(now)) {
-      quickResumeAt = now;
-      lastTick = now;
-      render();
+    updateTimestamp();
+    if (state.metadataStatus === 'ready') {
+      // Keep the rendered view mounted while the server refreshes data and access.
+      if (renderedRouteKey !== state.routeKey) render();
       resumeLiveSocket();
       if (state.route.type === 'detail') startDetailLoads(state.route);
-      scheduleMetadataRefresh(verifiedAt + METADATA_REFRESH_MS - now);
+      scheduleMetadataRefresh(metadataDueIn);
     } else {
-      revalidateForeground();
+      accessRetryAt = 0;
+      void refreshMetadata();
       scheduleMetadataRefresh(METADATA_REFRESH_MS);
     }
     refreshTimer = setInterval(tick, LIVE_REFRESH_MS);
@@ -1094,14 +1089,11 @@ export function startApp(root: HTMLElement): () => void {
       resumeForeground();
       return;
     }
-    if (verifying) {
+    if (state.metadataStatus !== 'ready') {
       void refreshMetadata(true);
       return;
     }
-    if (justResumed(Date.now(), LIVE_REFRESH_MS)) return;
-    suspendRequests();
-    stopLiveSocket();
-    revalidateForeground();
+    if (Date.now() - foregroundAt >= LIVE_REFRESH_MS) restartLiveUpdates();
   };
 
   const handleRouteChange = (): void => {
@@ -1132,7 +1124,7 @@ export function startApp(root: HTMLElement): () => void {
     else resumeForeground(event.isTrusted);
   });
   state.routeKey = routeKey(state.route);
-  showAccessCheck('paused');
+  showStartupStatus('paused');
   resumeForeground();
 
   return () => {
