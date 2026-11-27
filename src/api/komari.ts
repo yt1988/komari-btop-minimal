@@ -397,7 +397,7 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
     ? options.nodeUuid()
     : options.scope === 'node' ? options.uuid : undefined;
 
-  const request = (): void => {
+  const request = (timeoutMs = 9000): void => {
     const current = socket;
     if (paused || current?.readyState !== WebSocket.OPEN || responseTimer !== null) {
       return;
@@ -405,7 +405,7 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
     try {
       pendingUuid = desiredUuid();
       current.send(pendingUuid ? `get ${pendingUuid}` : 'get');
-      responseTimer = setTimeout(() => fail(current, new Error('/api/clients: snapshot timed out')), 9000);
+      responseTimer = setTimeout(() => fail(current, new Error('/api/clients: snapshot timed out')), timeoutMs);
     } catch (error) {
       fail(current, error);
     }
@@ -521,7 +521,8 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
         closeConnection();
         connect();
       } else {
-        request();
+        // Safari can report OPEN after the connection stopped responding in the background.
+        request(2000);
       }
     },
     stop: () => {

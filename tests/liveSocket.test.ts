@@ -129,4 +129,31 @@ describe('live WebSocket scope and visibility', () => {
     expect(TestSocket.instances).toHaveLength(2);
     socket.stop();
   });
+
+  it('reconnects promptly when an apparently open socket is unresponsive after resume', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', TestSocket);
+    const onSnapshot = vi.fn();
+    const socket = createLiveSocket({ scope: 'all', onSnapshot });
+    const original = TestSocket.instances[0]!;
+    original.open();
+    original.reply();
+
+    socket.pause();
+    socket.resume();
+    expect(original.send).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1999);
+    expect(original.close).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1001);
+    expect(original.close).toHaveBeenCalledOnce();
+    expect(TestSocket.instances).toHaveLength(2);
+
+    const replacement = TestSocket.instances[1]!;
+    replacement.open();
+    original.reply();
+    expect(onSnapshot).toHaveBeenCalledOnce();
+    replacement.reply();
+    expect(onSnapshot).toHaveBeenCalledTimes(2);
+    socket.stop();
+  });
 });

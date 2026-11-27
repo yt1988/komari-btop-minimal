@@ -33,6 +33,8 @@ const HISTORY_REFRESH_MS = 60_000;
 const LIVE_REFRESH_MS = 3000;
 const LIVE_STALE_MS = 3 * LIVE_REFRESH_MS;
 const HIDDEN_SOCKET_GRACE_MS = 30_000;
+const QUICK_RESUME_MS = 10_000;
+const METADATA_REFRESH_MS = 60_000;
 
 type HistoryStatus = 'loading' | 'ready' | 'error';
 type MetadataStatus = 'loading' | 'ready' | 'error' | 'denied';
@@ -175,6 +177,8 @@ export function startApp(root: HTMLElement): () => void {
   let foreground = false;
   let verifying = true;
   let accessRetryAt = 0;
+  let accessVerifiedAt: number | null = null;
+  let quickResumeAt: number | null = null;
   let lastTick = Date.now();
   let hiddenAt: number | null = null;
   let socketCloseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -201,7 +205,7 @@ export function startApp(root: HTMLElement): () => void {
   let metadataRequestId = 0;
   let stopped = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
-  let metadataTimer: ReturnType<typeof setInterval> | null = null;
+  let metadataTimer: ReturnType<typeof setTimeout> | null = null;
   let liveSocket: ReturnType<typeof createLiveSocket> | null = null;
   let pingTasksRequest: Promise<PingTask[]> | null = null;
   const latencyColorRegistry: NodeLatencyColorRegistry = (() => {
@@ -349,12 +353,19 @@ export function startApp(root: HTMLElement): () => void {
   };
   let wasStale = false;
 
+  const recentlyVerified = (now: number): boolean => !verifying && state.metadataStatus === 'ready'
+    && accessVerifiedAt !== null && now >= accessVerifiedAt && now - accessVerifiedAt < METADATA_REFRESH_MS;
+
+  const justResumed = (now: number, interval: number): boolean => quickResumeAt !== null
+    && now >= quickResumeAt && now - quickResumeAt < interval;
+
   const updateLiveConnection = (status: LiveSocketStatus): void => {
     const previous = state.liveConnection;
     state.liveConnection = status;
     if (foreground && !verifying && status === 'reconnecting' && previous !== 'reconnecting') {
       announce('reconnecting live telemetry');
-      if (state.metadataStatus === 'ready' && metadataController === null) {
+      const now = Date.now();
+      if (state.metadataStatus === 'ready' && !(justResumed(now, QUICK_RESUME_MS) && recentlyVerified(now))) {
         void refreshMetadata();
       }
     }
@@ -366,6 +377,7 @@ export function startApp(root: HTMLElement): () => void {
     metadataController = null;
     metadataRequestId += 1;
     verifying = false;
+    accessVerifiedAt = null;
     state.metadataStatus = 'denied';
     clearSessionData();
     render();
@@ -779,6 +791,19 @@ export function startApp(root: HTMLElement): () => void {
   const requestedNode = (): string | undefined =>
     state.route.type === 'detail' && !switcher && metadataByUuid.has(state.route.uuid) ? state.route.uuid : undefined;
 
+  const resumeLiveSocket = (): void => {
+    if (liveSocket) {
+      liveSocket.resume();
+      return;
+    }
+    liveSocket = createLiveSocket({
+      scope: 'all',
+      nodeUuid: requestedNode,
+      onSnapshot: applySnapshot,
+      onStatusChange: updateLiveConnection,
+    });
+  };
+
   const refreshMetadata = async (immediate = false): Promise<void> => {
     if (!foreground || metadataController || (!immediate && verifying && Date.now() < accessRetryAt)) return;
     if (verifying) showAccessCheck('checking');
@@ -832,17 +857,9 @@ export function startApp(root: HTMLElement): () => void {
       }
       verifying = false;
       state.metadataStatus = 'ready';
+      accessVerifiedAt = Date.now();
       if (resuming || changed) render();
-      if (!liveSocket) {
-        liveSocket = createLiveSocket({
-          scope: 'all',
-          nodeUuid: requestedNode,
-          onSnapshot: applySnapshot,
-          onStatusChange: updateLiveConnection,
-        });
-      } else if (resuming) {
-        liveSocket.resume();
-      }
+      if (resuming || !liveSocket) resumeLiveSocket();
       if ((resuming || changed) && state.route.type === 'detail') startDetailLoads(state.route);
     } catch (error: unknown) {
       if (stopped || requestId !== metadataRequestId || recheckAccess(error)) return;
@@ -978,7 +995,7 @@ export function startApp(root: HTMLElement): () => void {
     showAccessCheck('paused');
     closeSwitcher();
     if (refreshTimer !== null) clearInterval(refreshTimer);
-    if (metadataTimer !== null) clearInterval(metadataTimer);
+    if (metadataTimer !== null) clearTimeout(metadataTimer);
     if (timestampTimer !== null) clearInterval(timestampTimer);
     refreshTimer = metadataTimer = timestampTimer = null;
     liveSocket?.pause();
@@ -989,6 +1006,7 @@ export function startApp(root: HTMLElement): () => void {
   const revalidateForeground = (): void => {
     verifying = true;
     accessRetryAt = 0;
+    quickResumeAt = null;
     lastTick = Date.now();
     updateTimestamp();
     liveSocket?.pause();
@@ -1013,17 +1031,37 @@ export function startApp(root: HTMLElement): () => void {
     if (state.route.type === 'detail' && !state.online.has(state.route.uuid)) updateCore();
   };
 
+  const scheduleMetadataRefresh = (delay: number): void => {
+    metadataTimer = setTimeout(() => {
+      if (!foreground) return;
+      void refreshMetadata();
+      scheduleMetadataRefresh(METADATA_REFRESH_MS);
+    }, delay);
+  };
+
   const resumeForeground = (userRequested = false): void => {
     if (foreground || (!userRequested && document.hidden) || stopped) return;
-    if (hiddenAt !== null && Date.now() - hiddenAt >= HIDDEN_SOCKET_GRACE_MS) stopLiveSocket();
+    const now = Date.now();
+    const hiddenFor = hiddenAt === null ? Infinity : now - hiddenAt;
+    if (hiddenFor >= HIDDEN_SOCKET_GRACE_MS) stopLiveSocket();
     if (socketCloseTimer !== null) clearTimeout(socketCloseTimer);
     socketCloseTimer = null;
     foreground = true;
     void loadSiteName();
-    revalidateForeground();
+    const verifiedAt = accessVerifiedAt;
+    if (verifiedAt !== null && hiddenFor >= 0 && hiddenFor < QUICK_RESUME_MS && recentlyVerified(now)) {
+      quickResumeAt = now;
+      lastTick = now;
+      render();
+      resumeLiveSocket();
+      if (state.route.type === 'detail') startDetailLoads(state.route);
+      scheduleMetadataRefresh(verifiedAt + METADATA_REFRESH_MS - now);
+    } else {
+      revalidateForeground();
+      scheduleMetadataRefresh(METADATA_REFRESH_MS);
+    }
     refreshTimer = setInterval(tick, LIVE_REFRESH_MS);
     timestampTimer = setInterval(updateTimestamp, 1000);
-    metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
   };
 
   const onVisibility = (): void => {
@@ -1060,6 +1098,7 @@ export function startApp(root: HTMLElement): () => void {
       void refreshMetadata(true);
       return;
     }
+    if (justResumed(Date.now(), LIVE_REFRESH_MS)) return;
     suspendRequests();
     stopLiveSocket();
     revalidateForeground();
