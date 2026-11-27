@@ -1,5 +1,5 @@
-import { formatLoss } from '../format';
-import type { LatencyQuery, LatencySeries } from '../domain';
+import { formatLoss, formatSpeed } from '../format';
+import type { LatencyQuery, LatencySeries, ResourceMetric } from '../domain';
 import {
   buildLatencyRuns,
   formatLatencyTimestamp,
@@ -17,22 +17,6 @@ function svgElement<K extends keyof SVGElementTagNameMap>(tag: K): SVGElementTag
   return document.createElementNS(SVG_NAMESPACE, tag);
 }
 
-function nearestPoint(series: LatencySeries, timestamp: number): { timestamp: number; value: number } | null {
-  let nearest: { timestamp: number; value: number } | null = null;
-  let distance = Number.POSITIVE_INFINITY;
-  for (const point of series.points) {
-    if (typeof point.value !== 'number' || !Number.isFinite(point.value) || point.value < 0) {
-      continue;
-    }
-    const candidateDistance = Math.abs(point.timestamp - timestamp);
-    if (candidateDistance < distance) {
-      nearest = point as { timestamp: number; value: number };
-      distance = candidateDistance;
-    }
-  }
-  return nearest;
-}
-
 export type LatencyChartOptions = {
   query: LatencyQuery | null;
   visibleTaskIds: string[];
@@ -40,6 +24,9 @@ export type LatencyChartOptions = {
   colorAssignments: LatencyColorAssignment;
   labels: Map<string, string>;
   rangeHours: number;
+  resource?: ResourceMetric;
+  chinese?: boolean;
+  probeIntervals?: ReadonlyMap<string, number>;
   offline?: readonly OfflineInterval[];
   /** Targets that get a loss lane, hidden ones included so the height never changes. */
   laneTaskIds?: readonly string[];
@@ -58,12 +45,13 @@ export function setChartOffline(container: HTMLElement, intervals: readonly Offl
 export function renderLatencyChart(container: HTMLElement, options: LatencyChartOptions): void {
   offlineSetters.delete(container);
   container.replaceChildren();
-  const series = (options.query?.series ?? []).filter((item) => options.visibleTaskIds.includes(item.taskId));
+  const series = options.visibleTaskIds.map((taskId) =>
+    options.query?.series.find((item) => item.taskId === taskId) ?? { taskId, label: taskId, points: [] });
   const points = series.flatMap((item) => item.points);
   if (points.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'chart-message muted';
-    empty.textContent = 'no latency records';
+    empty.textContent = options.resource ? (options.chinese ? '暂无历史数据' : 'no history records') : 'no latency records';
     container.append(empty);
     return;
   }
@@ -74,15 +62,22 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   const end = options.query?.end || latest;
   const timeSpan = Math.max(1, end - start);
   // The ceiling leaves room for the top of each spread band.
-  const ceiling = latencyCeiling(points.map((point) => ({
-    ...point,
-    value: point.value === null ? null : point.value + (point.spread ?? 0),
-  })));
-  const ticks = latencyTicks(ceiling);
+  const peak = points.reduce((max, point) => Math.max(max, point.value ?? 0), 0);
+  const speedStep = Math.max(1024, 2 ** Math.ceil(Math.log2(peak / 4)));
+  const ceiling = options.resource === 'cpu' ? 100 : options.resource === 'network' ? speedStep * 4
+    : latencyCeiling(points.map((point) => ({
+      ...point,
+      value: point.value === null ? null : point.value + (point.spread ?? 0),
+    })));
+  const ticks = options.resource ? [0, ceiling / 4, ceiling / 2, ceiling * 3 / 4, ceiling] : latencyTicks(ceiling);
+  const formatValue = options.resource === 'cpu' ? (value: number) => `${Number(value.toFixed(1))}%`
+    : options.resource === 'network' ? formatSpeed
+    : (value: number) => `${value.toFixed(1)}ms`;
+  const chartName = options.resource === 'cpu' ? 'CPU history' : options.resource === 'network' ? 'Network history' : 'Latency chart';
   const toX = (timestamp: number): number => (timestamp - start) / timeSpan * 1000;
   const toY = (value: number): number => 280 - Math.min(ceiling, value) / ceiling * 280;
   const stage = document.createElement('div');
-  stage.className = 'graph-wrap';
+  stage.className = options.resource === 'network' ? 'graph-wrap network-graph' : 'graph-wrap';
 
   const graphArea = document.createElement('div');
   graphArea.className = 'graph-area';
@@ -92,7 +87,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   axis.className = 'axis-y';
   ticks.forEach((value) => {
     const label = document.createElement('span');
-    label.textContent = value === 0 ? '0' : `${value}ms`;
+    label.textContent = value === 0 ? '0' : options.resource ? formatValue(value) : `${value}ms`;
     label.style.top = `${toY(value) / 280 * 100}%`;
     axis.append(label);
   });
@@ -101,9 +96,9 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   graph.setAttribute('viewBox', '0 0 1000 280');
   graph.setAttribute('preserveAspectRatio', 'none');
   graph.setAttribute('role', 'img');
-  graph.setAttribute('aria-label', 'Latency chart');
+  graph.setAttribute('aria-label', chartName);
   const description = svgElement('desc');
-  description.textContent = 'Each latency target uses a stable dedicated color.';
+  description.textContent = options.resource ? 'Average values over time.' : 'Each latency target uses a stable dedicated color.';
   graph.append(description);
 
   const grid = svgElement('g');
@@ -152,14 +147,27 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   const dotPath = (x: number, y: number): string => `M ${x.toFixed(3)} ${y.toFixed(3)} l 0 0`;
   const markers = new Map<string, SVGPathElement>();
   const colorOf = (taskId: string): string => options.colorAssignments.get(taskId) ?? latencySeriesColor(taskId, options.allTaskIds);
-  const sampleInterval = options.query?.intervalSeconds && options.query.intervalSeconds > 0
-    ? options.query.intervalSeconds * 1000
-    : Math.max(1, options.rangeHours * 60 / 480) * 60_000;
+  const intervals = new Map(series.map((item) => {
+    const interval = item.intervalSeconds ?? options.probeIntervals?.get(item.taskId);
+    if (interval && interval > 0) {
+      return [item.taskId, interval * 1000] as const;
+    }
+    if (!options.resource) {
+      return [item.taskId, 60_000] as const;
+    }
+    const times = item.points.map((point) => point.timestamp).sort((a, b) => a - b);
+    const gaps = times.slice(1).map((time, index) => time - times[index]!).filter((gap) => gap > 0).sort((a, b) => a - b);
+    // A single large gap provides no evidence about a node's collection cadence.
+    const cadence = gaps.length >= 2 ? gaps[Math.floor((gaps.length - 1) / 4)]! : 5000;
+    return [item.taskId, Math.min(cadence, 60_000)] as const;
+  }));
+  const sampleInterval = (item: LatencySeries): number => intervals.get(item.taskId)
+    ?? (item.intervalSeconds ?? options.probeIntervals?.get(item.taskId) ?? 60) * 1000;
   series.forEach((lineSeries) => {
     const color = colorOf(lineSeries.taskId);
     const group = svgElement('g');
     group.setAttribute('aria-label', options.labels.get(lineSeries.taskId) ?? lineSeries.label);
-    for (const run of buildLatencyRuns(lineSeries.points, sampleInterval)) {
+    for (const run of buildLatencyRuns(lineSeries.points, sampleInterval(lineSeries))) {
       const first = run[0];
       if (!first) {
         continue;
@@ -201,7 +209,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
 
   // One loss lane per target, in legend order. Loss is drawn in the target's own
   // color, brighter with more loss; hidden targets keep a dimmed lane.
-  const laneTaskIds = options.laneTaskIds ?? series.map((item) => item.taskId);
+  const laneTaskIds = options.resource ? [] : options.laneTaskIds ?? series.map((item) => item.taskId);
   if (laneTaskIds.length > 0) {
     const lanes = document.createElement('div');
     lanes.className = 'loss-lanes';
@@ -211,7 +219,6 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     laneSvg.setAttribute('viewBox', `0 0 1000 ${laneHeight}`);
     laneSvg.setAttribute('preserveAspectRatio', 'none');
     laneSvg.style.height = `${laneHeight}px`;
-    const bucketWidth = Math.max(0.5, sampleInterval / timeSpan * 1000);
     laneTaskIds.forEach((taskId, row) => {
       const y = row * (LANE_HEIGHT + LANE_GAP);
       const color = colorOf(taskId);
@@ -226,17 +233,23 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       track.setAttribute('width', '1000');
       track.setAttribute('height', String(LANE_HEIGHT));
       lane.append(track);
-      for (const point of options.query?.series.find((item) => item.taskId === taskId)?.points ?? []) {
-        if (typeof point.loss !== 'number' || point.loss <= 0) {
+      const item = options.query?.series.find((entry) => entry.taskId === taskId);
+      if (!item) {
+        return;
+      }
+      const bucketWidth = Math.max(0.5, sampleInterval(item) / timeSpan * 1000);
+      for (const point of item.points) {
+        const loss = point.value === -1 ? 1 : point.loss ?? 0;
+        if (loss <= 0) {
           continue;
         }
         const cell = svgElement('rect');
-        cell.setAttribute('x', (toX(point.timestamp) - bucketWidth / 2).toFixed(3));
+        cell.setAttribute('x', (toX(point.timestamp) - (item.intervalSeconds ? 0 : bucketWidth / 2)).toFixed(3));
         cell.setAttribute('y', String(y));
         cell.setAttribute('width', bucketWidth.toFixed(3));
         cell.setAttribute('height', String(LANE_HEIGHT));
         cell.style.fill = color;
-        cell.style.fillOpacity = Math.min(1, 0.3 + point.loss * 1.6).toFixed(2);
+        cell.style.fillOpacity = Math.min(1, 0.3 + loss * 1.6).toFixed(2);
         lane.append(cell);
       }
       laneSvg.append(lane);
@@ -276,20 +289,19 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     crosshair.setAttribute('x1', String(x));
     crosshair.setAttribute('x2', String(x));
     crosshair.style.visibility = 'visible';
-    const entries = latencyReadoutEntries(timestamp, series, options.labels);
-    series.forEach((lineSeries) => {
-      const marker = markers.get(lineSeries.taskId);
-      const point = nearestPoint(lineSeries, timestamp);
+    const entries = latencyReadoutEntries(timestamp, series, options.labels, sampleInterval);
+    for (const entry of entries) {
+      const marker = markers.get(entry.taskId);
       if (!marker) {
-        return;
+        continue;
       }
-      if (!point) {
+      if (entry.timestamp === null || entry.value === null) {
         marker.style.visibility = 'hidden';
-        return;
+        continue;
       }
-      marker.setAttribute('d', dotPath(toX(point.timestamp), toY(point.value)));
+      marker.setAttribute('d', dotPath(toX(entry.timestamp), toY(entry.value)));
       marker.style.visibility = 'visible';
-    });
+    }
     readout.replaceChildren();
     const timestampLabel = document.createElement('span');
     timestampLabel.className = 'chart-readout-time';
@@ -309,8 +321,13 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
       swatch.className = 'chart-readout-swatch';
       swatch.style.backgroundColor = options.colorAssignments.get(entry.taskId) ?? latencySeriesColor(entry.taskId, options.allTaskIds);
       swatch.setAttribute('aria-hidden', 'true');
-      value.append(swatch, document.createTextNode(`${entry.label} ${entry.value.toFixed(1)}ms`));
-      if (entry.loss !== null && entry.loss > 0) {
+      const reading = entry.loss === 1
+        ? (options.chinese ? '100% 丢包' : '100% loss')
+        : entry.value === null
+          ? (options.chinese ? '无采样' : 'no sample')
+          : formatValue(entry.value);
+      value.append(swatch, document.createTextNode(`${entry.label} ${reading}`));
+      if (entry.value !== null && entry.loss !== null && entry.loss > 0) {
         value.append(document.createTextNode(` ${formatLoss(entry.loss)}`));
       }
       readout.append(separator, value);

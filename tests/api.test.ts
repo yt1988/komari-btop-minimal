@@ -145,6 +145,7 @@ describe('Komari response normalization', () => {
       series: [{
         taskId: '7',
         label: '7',
+        intervalSeconds: 60,
         points: [
           { timestamp: Date.parse('2026-10-10T01:00:00Z'), value: 42 },
           { timestamp: Date.parse('2026-10-10T02:00:00Z'), value: null },

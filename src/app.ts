@@ -5,10 +5,11 @@ import {
   fetchNodeMetadata,
   fetchPingTasks,
   fetchPublicSettings,
+  fetchResourceHistory,
   isAccessDenied,
   type LiveSocketStatus,
 } from './api/komari';
-import type { LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
+import type { HistoryMetric, LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask, ResourceMetric } from './domain';
 import { reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
 import { parseLatencyRange, resolveLatencyTargets, toggleVisibleTasks } from './latency';
@@ -28,11 +29,11 @@ import { renderNodeSwitcher } from './views/switcher';
 import type { StatusView } from './views/status';
 
 const DEFAULT_LATENCY_HOURS = 24;
-const LATENCY_REFRESH_MS = 60_000;
+const HISTORY_REFRESH_MS = 60_000;
 const LIVE_REFRESH_MS = 3000;
 const LIVE_STALE_MS = 3 * LIVE_REFRESH_MS;
 
-type LatencyStatus = 'loading' | 'ready' | 'error';
+type HistoryStatus = 'loading' | 'ready' | 'error';
 type MetadataStatus = 'loading' | 'ready' | 'error' | 'denied';
 
 type ApplicationState = {
@@ -48,10 +49,10 @@ type ApplicationState = {
   liveConnection: LiveSocketStatus;
   route: Route;
   routeKey: string;
-  latencyRange: number;
-  latency: LatencyQuery | null;
-  displayedLatencyRange: number | null;
-  latencyStatus: LatencyStatus;
+  historyRange: number;
+  history: LatencyQuery | null;
+  displayedHistoryRange: number | null;
+  historyStatus: HistoryStatus;
   visibleTaskIds: string[] | null;
   statusFine: number[] | null;
   statusCoarse: number[] | null;
@@ -84,7 +85,7 @@ function clearLegacyNodeCache(): void {
 }
 
 function currentRoute(): Route {
-  return parseBrowserRoute(window.location.pathname, window.location.hash);
+  return parseBrowserRoute(window.location.pathname, window.location.hash, window.location.search);
 }
 
 function navigate(route: Route): void {
@@ -93,7 +94,7 @@ function navigate(route: Route): void {
 }
 
 function routeKey(route: Route): string {
-  return route.type === 'nodes' ? 'nodes' : `detail:${route.uuid}`;
+  return route.type === 'nodes' ? 'nodes' : `detail:${route.uuid}:${route.metric ?? 'latency'}`;
 }
 
 function formatRefreshTime(timestamp: number | null): string {
@@ -110,7 +111,8 @@ function formatRefreshTime(timestamp: number | null): string {
 }
 
 function latencyTargets(state: ApplicationState, uuid: string): Map<string, string> {
-  return resolveLatencyTargets(state.tasks, state.tasksReady, uuid, state.latency?.series ?? []);
+  const series = state.route.type === 'detail' && !state.route.metric ? state.history?.series ?? [] : [];
+  return resolveLatencyTargets(state.tasks, state.tasksReady, uuid, series);
 }
 
 function allTaskIds(state: ApplicationState, uuid: string): string[] {
@@ -135,6 +137,7 @@ export function startApp(root: HTMLElement): () => void {
   const startedAt = Date.now();
   clearLegacyNodeCache();
 
+  const initialRoute = currentRoute();
   const state: ApplicationState = {
     nodes: [],
     reports: new Map(),
@@ -146,12 +149,12 @@ export function startApp(root: HTMLElement): () => void {
     lastUpdate: null,
     lastSnapshotTimestamp: null,
     liveConnection: 'connecting',
-    route: currentRoute(),
+    route: initialRoute,
     routeKey: '',
-    latencyRange: storedLatencyRange(),
-    latency: null,
-    displayedLatencyRange: null,
-    latencyStatus: 'loading',
+    historyRange: initialRoute.type === 'detail' && initialRoute.metric ? 1 : storedLatencyRange(),
+    history: null,
+    displayedHistoryRange: null,
+    historyStatus: 'loading',
     visibleTaskIds: null,
     statusFine: null,
     statusCoarse: null,
@@ -160,10 +163,14 @@ export function startApp(root: HTMLElement): () => void {
   let statusRequestId = 0;
   let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let statusCoarseAt = 0;
-  const newLatencyCache = () => createLatencyCache(fetchLatency);
-  let latencyCache = newLatencyCache();
-  let latencyRequestId = 0;
-  let latencyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const newHistoryCaches = () => ({
+    latency: createLatencyCache(fetchLatency),
+    cpu: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'cpu')),
+    network: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'network')),
+  });
+  let historyCaches = newHistoryCaches();
+  let historyRequestId = 0;
+  let historyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let metadataController: AbortController | null = null;
   let metadataRequestId = 0;
   let stopped = false;
@@ -345,10 +352,18 @@ export function startApp(root: HTMLElement): () => void {
     onNodeSelect: (uuid: string) => {
       navigate({ type: 'detail', uuid });
     },
+    onTrendSelect: (uuid: string, metric: ResourceMetric) => {
+      navigate({ type: 'detail', uuid, metric });
+    },
     // Hovering a node name warms what its detail page needs first.
     onNodeIntent: (uuid: string) => {
-      if (state.metadataStatus === 'ready') {
-        latencyCache.prefetch(uuid, state.latencyRange, LATENCY_REFRESH_MS);
+      if (state.metadataStatus !== 'ready') {
+        return;
+      }
+      const metric = state.route.type === 'detail' ? state.route.metric ?? 'latency' : 'latency';
+      const hours = state.route.type === 'detail' ? state.historyRange : storedLatencyRange();
+      historyCaches[metric].prefetch(uuid, hours, HISTORY_REFRESH_MS);
+      if (metric === 'latency') {
         void ensurePingTasks();
       }
     },
@@ -414,7 +429,7 @@ export function startApp(root: HTMLElement): () => void {
       return;
     }
 
-    const ids = allTaskIds(state, state.route.uuid);
+    const ids = state.route.metric ? [] : allTaskIds(state, state.route.uuid);
     let visible = state.visibleTaskIds === null
       ? ids
       : state.visibleTaskIds.filter((id) => ids.includes(id));
@@ -423,17 +438,22 @@ export function startApp(root: HTMLElement): () => void {
       visible = ids;
     }
     const detailRoute = state.route;
-    const colorPlan = reconcileLatencyColors(latencyColorRegistry, detailRoute.uuid, ids);
-    persistLatencyColors();
+    const colorPlan = detailRoute.metric ? { assignments: new Map<string, string>(), overflowTaskIds: [] }
+      : reconcileLatencyColors(latencyColorRegistry, detailRoute.uuid, ids);
+    if (!detailRoute.metric) {
+      persistLatencyColors();
+    }
     const node = getCurrentNode();
     renderDetailView(page, {
       node,
       status: getStatusView(node),
+      metric: detailRoute.metric ?? 'latency',
       targets: latencyTargets(state, detailRoute.uuid),
-      latency: state.latency,
-      latencyState: state.latencyStatus,
-      latencyRange: state.latencyRange,
-      displayedLatencyRange: state.displayedLatencyRange,
+      probeIntervals: new Map(state.tasks.filter((task) => task.interval > 0).map((task) => [task.id, task.interval])),
+      history: state.history,
+      historyState: state.historyStatus,
+      historyRange: state.historyRange,
+      displayedHistoryRange: state.displayedHistoryRange,
       chinese,
       visibleTaskIds: visible,
       colorAssignments: colorPlan.assignments,
@@ -442,16 +462,21 @@ export function startApp(root: HTMLElement): () => void {
         onBack: () => {
           navigate({ type: 'nodes' });
         },
+        onMetricChange: (metric) => {
+          if (state.route.type === 'detail' && metric !== (state.route.metric ?? 'latency')) {
+            navigate({ type: 'detail', uuid: state.route.uuid, metric: metric === 'latency' ? undefined : metric });
+          }
+        },
         onRangeChange: (hours) => {
-          if (state.latencyRange === hours) {
+          if (state.historyRange === hours) {
             return;
           }
-          state.latencyRange = hours;
+          state.historyRange = hours;
           storeLatencyRange(hours);
-          loadLatency(detailRoute.uuid, hours);
+          loadHistory(detailRoute.uuid, detailRoute.metric ?? 'latency', hours);
         },
-        onLatencyRetry: () => {
-          loadLatency(detailRoute.uuid, state.latencyRange, true);
+        onHistoryRetry: () => {
+          loadHistory(detailRoute.uuid, detailRoute.metric ?? 'latency', state.historyRange, true);
         },
         onTaskToggle: (taskId) => {
           const currentIds = allTaskIds(state, detailRoute.uuid);
@@ -463,10 +488,10 @@ export function startApp(root: HTMLElement): () => void {
     });
   };
 
-  const clearLatencyRefresh = (): void => {
-    if (latencyRefreshTimer !== null) {
-      clearTimeout(latencyRefreshTimer);
-      latencyRefreshTimer = null;
+  const clearHistoryRefresh = (): void => {
+    if (historyRefreshTimer !== null) {
+      clearTimeout(historyRefreshTimer);
+      historyRefreshTimer = null;
     }
   };
 
@@ -474,50 +499,56 @@ export function startApp(root: HTMLElement): () => void {
    * Shows cached data for the node and range at once when there is any, then
    * refreshes it; `refresh` skips the cache for the periodic update.
    */
-  const loadLatency = (uuid: string, hours: number, refresh = false): void => {
-    clearLatencyRefresh();
-    const requestId = ++latencyRequestId;
-    const current = (): boolean => !stopped && requestId === latencyRequestId
-      && state.route.type === 'detail' && state.route.uuid === uuid && state.latencyRange === hours;
-    const cached = refresh ? null : latencyCache.peek(uuid, hours);
+  const loadHistory = (uuid: string, metric: HistoryMetric, hours: number, refresh = false): void => {
+    clearHistoryRefresh();
+    const requestId = ++historyRequestId;
+    const current = (): boolean => !stopped && requestId === historyRequestId
+      && state.route.type === 'detail' && state.route.uuid === uuid && (state.route.metric ?? 'latency') === metric && state.historyRange === hours;
+    const cache = historyCaches[metric];
+    const cached = refresh ? null : cache.peek(uuid, hours);
     if (cached) {
-      state.latency = cached.query;
-      state.displayedLatencyRange = hours;
-      state.latencyStatus = 'ready';
+      state.history = cached.query;
+      state.displayedHistoryRange = hours;
+      state.historyStatus = 'ready';
       render();
-      if (cached.ageMs < LATENCY_REFRESH_MS) {
-        latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), LATENCY_REFRESH_MS - cached.ageMs);
+      if (cached.ageMs < HISTORY_REFRESH_MS) {
+        historyRefreshTimer = setTimeout(() => loadHistory(uuid, metric, hours, true), HISTORY_REFRESH_MS - cached.ageMs);
         return;
       }
-    } else if (state.displayedLatencyRange !== hours || state.latencyStatus === 'error') {
-      state.latencyStatus = 'loading';
+    } else if (state.displayedHistoryRange !== hours || state.historyStatus === 'error') {
+      state.historyStatus = 'loading';
       render();
     }
-    void latencyCache.fetch(uuid, hours).then((query) => {
+    void cache.fetch(uuid, hours).then((query) => {
       if (!current()) {
         return;
       }
-      state.latency = query;
-      state.displayedLatencyRange = hours;
-      state.latencyStatus = 'ready';
+      state.history = query;
+      state.displayedHistoryRange = hours;
+      state.historyStatus = 'ready';
       render();
-      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), LATENCY_REFRESH_MS);
+      historyRefreshTimer = setTimeout(() => loadHistory(uuid, metric, hours, true), HISTORY_REFRESH_MS);
     }).catch((error: unknown) => {
       if (!current()) {
         return;
       }
       recheckAccess(error);
-      state.latencyStatus = 'error';
+      state.historyStatus = 'error';
       render();
-      latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), 15_000);
+      historyRefreshTimer = setTimeout(() => loadHistory(uuid, metric, hours, true), 15_000);
     });
   };
 
-  /** Starts everything a detail page needs; nothing waits on the node list, the uuid comes from the URL. */
-  const startDetailLoads = (uuid: string): void => {
-    loadStatusRecords(uuid);
-    void ensurePingTasks();
-    loadLatency(uuid, state.latencyRange);
+  const loadRouteHistory = (route: Extract<Route, { type: 'detail' }>): void => {
+    if (!route.metric) {
+      void ensurePingTasks();
+    }
+    loadHistory(route.uuid, route.metric ?? 'latency', state.historyRange);
+  };
+
+  const startDetailLoads = (route: Extract<Route, { type: 'detail' }>): void => {
+    loadStatusRecords(route.uuid);
+    loadRouteHistory(route);
   };
 
   // Node switcher on detail pages: the node name toggles it under the name, and a
@@ -543,12 +574,12 @@ export function startApp(root: HTMLElement): () => void {
       return null;
     }
     closeSwitcher();
-    const currentUuid = state.route.uuid;
+    const { uuid: currentUuid, metric } = state.route;
     const list = renderNodeSwitcher(getNodeStates(), currentUuid, {
       onSelect: (uuid) => {
         closeSwitcher();
         if (uuid !== currentUuid) {
-          navigate({ type: 'detail', uuid });
+          navigate({ type: 'detail', uuid, metric });
         }
       },
       onIntent: nodeHandlers.onNodeIntent,
@@ -618,13 +649,25 @@ export function startApp(root: HTMLElement): () => void {
       return;
     }
     closeSwitcher();
+    const previousRoute = state.route;
     state.route = route;
     state.routeKey = key;
-    clearLatencyRefresh();
-    latencyRequestId += 1;
-    state.latency = null;
-    state.displayedLatencyRange = null;
-    state.latencyStatus = 'loading';
+    if (route.type === 'detail' && previousRoute.type === 'nodes') {
+      state.historyRange = route.metric ? 1 : storedLatencyRange();
+    }
+    clearHistoryRefresh();
+    historyRequestId += 1;
+    state.history = null;
+    state.displayedHistoryRange = null;
+    state.historyStatus = 'loading';
+    if (route.type === 'detail' && previousRoute.type === 'detail' && route.uuid === previousRoute.uuid) {
+      if (state.metadataStatus === 'ready') {
+        loadRouteHistory(route);
+      } else {
+        render();
+      }
+      return;
+    }
     state.visibleTaskIds = null;
     clearStatusRefresh();
     statusController?.abort();
@@ -632,7 +675,7 @@ export function startApp(root: HTMLElement): () => void {
     state.statusFine = null;
     state.statusCoarse = null;
     if (route.type === 'detail' && state.metadataStatus === 'ready') {
-      startDetailLoads(route.uuid);
+      startDetailLoads(route);
       return;
     }
     render();
@@ -651,12 +694,12 @@ export function startApp(root: HTMLElement): () => void {
     state.tasks = [];
     state.tasksReady = false;
     pingTasksRequest = null;
-    clearLatencyRefresh();
-    latencyRequestId += 1;
-    latencyCache = newLatencyCache();
-    state.latency = null;
-    state.displayedLatencyRange = null;
-    state.latencyStatus = 'loading';
+    clearHistoryRefresh();
+    historyRequestId += 1;
+    historyCaches = newHistoryCaches();
+    state.history = null;
+    state.displayedHistoryRange = null;
+    state.historyStatus = 'loading';
     state.visibleTaskIds = null;
     clearStatusRefresh();
     statusController?.abort();
@@ -686,7 +729,7 @@ export function startApp(root: HTMLElement): () => void {
           onStatusChange: updateLiveConnection,
         });
         if (state.route.type === 'detail') {
-          startDetailLoads(state.route.uuid);
+          startDetailLoads(state.route);
         }
       }
     } catch (error: unknown) {
@@ -801,7 +844,7 @@ export function startApp(root: HTMLElement): () => void {
   return () => {
     stopped = true;
     clearInterval(timestampTimer);
-    clearLatencyRefresh();
+    clearHistoryRefresh();
     clearStatusRefresh();
     statusController?.abort();
     metadataController?.abort();

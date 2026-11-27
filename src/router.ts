@@ -1,4 +1,6 @@
-export type Route = { type: 'nodes' } | { type: 'detail'; uuid: string };
+import type { ResourceMetric } from './domain';
+
+export type Route = { type: 'nodes' } | { type: 'detail'; uuid: string; metric?: ResourceMetric };
 
 function decodeSegment(segment: string): string {
   try {
@@ -26,16 +28,18 @@ function parseHash(hash: string): Route | null {
   return parsePath(hash.slice(1) || '/');
 }
 
-export function parseRoute(pathname: string, hash = ''): Route {
+export function parseRoute(pathname: string, hash = '', search = ''): Route {
   const hashRoute = parseHash(hash);
   if ((pathname === '' || pathname === '/') && hashRoute) {
     return hashRoute;
   }
-  return parsePath(pathname) ?? hashRoute ?? { type: 'nodes' };
+  const route = parsePath(pathname) ?? hashRoute ?? { type: 'nodes' };
+  const metric = new URLSearchParams(search).get('metric');
+  return route.type === 'detail' && (metric === 'cpu' || metric === 'network') ? { ...route, metric } : route;
 }
 
 export function routePath(route: Route): string {
-  return route.type === 'nodes' ? '/' : `/nodes/${encodeURIComponent(route.uuid)}`;
+  return route.type === 'nodes' ? '/' : `/nodes/${encodeURIComponent(route.uuid)}${route.metric ? `?metric=${route.metric}` : ''}`;
 }
 
 export function legacyRoutePath(hash: string): string | null {

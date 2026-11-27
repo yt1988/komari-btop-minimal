@@ -4,7 +4,7 @@ import {
   LATENCY_SERIES_COLORS,
   buildLatencyRuns,
   buildLatencySegments,
-  formatLatencyReadout,
+  latencyReadoutEntries,
   latencyCeiling,
   latencyTicks,
   parseLatencyRange,
@@ -116,17 +116,31 @@ describe('latency selection and segmentation', () => {
     ]);
   });
 
-  it('formats the hovered timestamp and visible probe values', () => {
-    const labels = new Map([['unicom', 'unicom'], ['mobile', 'mobile']]);
-    expect(formatLatencyReadout(
-      Date.parse('2026-10-11T01:02:03Z'),
-      [
-        { taskId: 'unicom', label: 'unicom', points: [{ timestamp: Date.parse('2026-10-11T01:02:00Z'), value: 42 }] },
-        { taskId: 'mobile', label: 'mobile', points: [{ timestamp: Date.parse('2026-10-11T01:02:00Z'), value: 210 }] },
+  it('keeps missing buckets and total loss distinct from a neighbouring latency value', () => {
+    const labels = new Map([['1', 'unicom']]);
+    const series = [{
+      taskId: '1',
+      label: '1',
+      intervalSeconds: 60,
+      points: [
+        { timestamp: 0, value: 42 },
+        { timestamp: 120_000, value: null, loss: 1 },
+        { timestamp: 180_000, value: -1 },
+        { timestamp: 240_000, value: 20 },
       ],
-      labels,
-      24,
-    )).toContain('unicom 42.0ms');
+    }];
+    const at = (timestamp: number) => latencyReadoutEntries(timestamp, series, labels, () => 60_000)[0];
+    expect(at(59_999)).toMatchObject({ label: 'unicom', value: 42 });
+    expect(at(60_000)).toMatchObject({ timestamp: null, value: null, loss: null });
+    expect(at(140_000)).toMatchObject({ timestamp: 120_000, value: null, loss: 1 });
+    expect(at(200_000)).toMatchObject({ value: null, loss: 1 });
+    expect(at(240_000)).toMatchObject({ value: 20 });
+  });
+
+  it('only reads a nearby raw sample within half the configured probe interval', () => {
+    const series = [{ taskId: '1', label: '1', points: [{ timestamp: 100_000, value: 12 }] }];
+    expect(latencyReadoutEntries(110_000, series, new Map(), () => 20_000)[0]?.value).toBe(12);
+    expect(latencyReadoutEntries(110_001, series, new Map(), () => 20_000)[0]?.value).toBeNull();
   });
 });
 

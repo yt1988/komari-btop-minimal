@@ -66,9 +66,14 @@ export type LatencyPoint = {
   samples?: number | null;
 };
 
+export type ResourceMetric = 'cpu' | 'network';
+export type HistoryMetric = 'latency' | ResourceMetric;
+
 export type LatencySeries = {
   taskId: string;
   label: string;
+  /** Bucket width, when the API returned aggregated rather than raw samples. */
+  intervalSeconds?: number;
   points: LatencyPoint[];
 };
 

@@ -4,6 +4,7 @@ import type {
   LiveSnapshot,
   NodeMetadata,
   PingTask,
+  ResourceMetric,
 } from '../domain';
 import { mergeLatencyQuality } from '../latency';
 
@@ -195,17 +196,20 @@ export function parseLiveSnapshot(raw: unknown): LiveSnapshot {
   return { online, data: normalized };
 }
 
-export function parseLatencyQuery(raw: unknown): LatencyQuery {
+export function parseLatencyQuery(raw: unknown, kind: 'latency' | 'resource' = 'latency'): LatencyQuery {
   const data = asObject(unwrapRpcResponse(raw, '/api/rpc2'), '/api/rpc2');
   const rawSeries = asArray(data.series, '/api/rpc2');
-  let intervalSeconds = asFiniteNumber(data.interval_seconds);
+  const defaultInterval = asFiniteNumber(data.interval_seconds);
+  let intervalSeconds = defaultInterval;
   const series = rawSeries.map((item, index) => {
     const source = asObject(item, '/api/rpc2');
+    const seriesInterval = asFiniteNumber(source.interval_seconds, defaultInterval);
     if (intervalSeconds <= 0) {
-      intervalSeconds = asFiniteNumber(source.interval_seconds);
+      intervalSeconds = seriesInterval;
     }
     const tags = recordValue(source, 'tags');
-    const taskId = asStringId(tags.task_id) || asStringId(source.task_id) || `series-${index + 1}`;
+    const taskId = (kind === 'resource' ? asString(source.metric_key) : asStringId(tags.task_id) || asStringId(source.task_id))
+      || `series-${index + 1}`;
     const points = asArray(source.points, '/api/rpc2').map((point) => {
       const value = asObject(point, '/api/rpc2');
       const timestamp = parseTimestamp(value.time ?? value.timestamp);
@@ -220,6 +224,7 @@ export function parseLatencyQuery(raw: unknown): LatencyQuery {
     return {
       taskId,
       label: asString(tags.task_name, asString(source.name, taskId)),
+      ...(seriesInterval > 0 ? { intervalSeconds: seriesInterval } : {}),
       points,
     };
   });
@@ -270,23 +275,23 @@ export async function fetchLoadRecordTimes(uuid: string, hours: number, signal?:
   return parseLoadRecordTimes(await fetchJson(`/api/records/load?${query}`, { signal }));
 }
 
-async function queryPingMetric(
+async function queryMetrics(
   uuid: string,
   hours: number,
-  metricKey: 'ping.latency_ms' | 'ping.loss',
+  metrics: { metric_key: string } | { metric_keys: readonly string[] },
   aggregation: 'avg' | 'stddev',
   signal?: AbortSignal,
-): Promise<LatencyQuery> {
-  const raw = await fetchJson('/api/rpc2', {
+): Promise<unknown> {
+  return fetchJson('/api/rpc2', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
     body: JSON.stringify({
       jsonrpc: '2.0',
-      id: `${metricKey}-${aggregation}-${uuid}-${hours}`,
+      id: `${'metric_key' in metrics ? metrics.metric_key : metrics.metric_keys.join(',')}-${aggregation}-${uuid}-${hours}`,
       method: 'public:queryMetrics',
       params: {
-        metric_key: metricKey,
+        ...metrics,
         entity_id: uuid,
         hours,
         max_points: 480,
@@ -295,7 +300,11 @@ async function queryPingMetric(
       },
     }),
   });
-  return parseLatencyQuery(raw);
+}
+
+export async function fetchResourceHistory(uuid: string, hours: number, metric: ResourceMetric): Promise<LatencyQuery> {
+  const keys = metric === 'cpu' ? ['cpu.usage'] : ['net.in.rate', 'net.out.rate'];
+  return parseLatencyQuery(await queryMetrics(uuid, hours, { metric_keys: keys }, 'avg'), 'resource');
 }
 
 /**
@@ -310,9 +319,9 @@ export async function fetchLatency(uuid: string, hours: number, signal?: AbortSi
     return null;
   });
   const [average, deviation, loss] = await Promise.all([
-    queryPingMetric(uuid, hours, 'ping.latency_ms', 'avg', signal),
-    optional(queryPingMetric(uuid, hours, 'ping.latency_ms', 'stddev', signal)),
-    optional(queryPingMetric(uuid, hours, 'ping.loss', 'avg', signal)),
+    queryMetrics(uuid, hours, { metric_key: 'ping.latency_ms' }, 'avg', signal).then((raw) => parseLatencyQuery(raw)),
+    optional(queryMetrics(uuid, hours, { metric_key: 'ping.latency_ms' }, 'stddev', signal).then((raw) => parseLatencyQuery(raw))),
+    optional(queryMetrics(uuid, hours, { metric_key: 'ping.loss' }, 'avg', signal).then((raw) => parseLatencyQuery(raw))),
   ]);
   return mergeLatencyQuality(average, deviation, loss);
 }

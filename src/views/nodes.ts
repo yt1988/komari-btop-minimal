@@ -1,11 +1,12 @@
 import { formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
-import type { NodeState } from '../domain';
-import { renderTrafficCell } from './traffic';
+import type { NodeState, ResourceMetric } from '../domain';
+import { createTrafficCell } from './traffic';
 
 export type NodeListHandlers = {
   onGroupSelect: (group: string) => void;
   onNodeSelect: (uuid: string) => void;
+  onTrendSelect: (uuid: string, metric: ResourceMetric) => void;
   /** A pointer or focus resting on a node name; used to prefetch its detail data. */
   onNodeIntent?: (uuid: string) => void;
 };
@@ -37,14 +38,12 @@ function regionFlag(code: string): HTMLImageElement {
   return flag;
 }
 
-function resourceCell(value: number | null, online: boolean, label: 'cpu' | 'mem' | 'disk'): HTMLDivElement {
-  const cell = element('div', `resource resource-${label}`);
-  cell.dataset.mobileLabel = label.toUpperCase();
+function renderResource(cell: HTMLDivElement, value: number | null, online: boolean): void {
   if (value === null || !Number.isFinite(value) || !online) {
     const unavailable = element('span', online ? 'muted' : 'danger');
     unavailable.textContent = '--';
-    cell.append(unavailable);
-    return cell;
+    cell.replaceChildren(unavailable);
+    return;
   }
   const percent = Math.max(0, Math.min(100, value));
   const tone = metricTone(percent);
@@ -52,8 +51,7 @@ function resourceCell(value: number | null, online: boolean, label: 'cpu' | 'mem
   bar.textContent = progressBar(percent, 100, 10);
   const text = element('span', `percent ${tone === 'warning' ? 'warn' : 'ok'}`);
   text.textContent = formatPercent(percent);
-  cell.append(bar, text);
-  return cell;
+  cell.replaceChildren(bar, text);
 }
 
 function resourceRatio(used: number | null | undefined, total: number | null | undefined): number | null {
@@ -63,27 +61,58 @@ function resourceRatio(used: number | null | undefined, total: number | null | u
   return used / total * 100;
 }
 
-function networkCell(node: NodeState): HTMLDivElement {
-  const cell = element('div', 'network');
-  cell.dataset.mobileLabel = 'NETWORK';
-  const report = node.report?.network;
-  for (const [direction, value] of [['down', report?.down], ['up', report?.up]] as const) {
-    const speed = element('span', `direction ${direction}`);
+function createMetricLinks(uuid: string, handlers: NodeListHandlers) {
+  const cpu = element('div', 'resource resource-cpu');
+  cpu.dataset.mobileLabel = 'CPU';
+  const bar = element('span', 'resource-bar');
+  bar.setAttribute('aria-hidden', 'true');
+  const percent = element('button', 'percent trend-link');
+  percent.type = 'button';
+  percent.addEventListener('click', () => handlers.onTrendSelect(uuid, 'cpu'));
+  cpu.append(bar, percent);
+
+  const network = element('div', 'network');
+  network.dataset.mobileLabel = 'NETWORK';
+  const directions = (['down', 'up'] as const).map((direction) => {
+    const speed = element('button', `direction ${direction} trend-link`);
+    speed.type = 'button';
+    speed.addEventListener('click', () => handlers.onTrendSelect(uuid, 'network'));
     const arrow = element('span', 'direction-arrow');
     arrow.textContent = direction === 'down' ? '↓' : '↑';
     const text = element('span', 'direction-value');
-    text.textContent = node.online && typeof value === 'number' ? formatSpeed(value) : '--';
     speed.append(arrow, text);
-    if (!node.online) {
-      speed.classList.add('danger');
-    } else if (typeof value !== 'number') {
-      speed.classList.add('muted');
-    } else {
-      addTone(speed, networkTone(value), true);
-    }
-    cell.append(speed);
-  }
-  return cell;
+    network.append(speed);
+    return { direction, speed, text };
+  });
+
+  return {
+    cpu,
+    network,
+    update(node: NodeState): void {
+      const usage = node.report?.cpuUsage;
+      const available = node.online && usage != null;
+      const tone = !node.online ? 'danger' : !available ? 'muted' : metricTone(usage) === 'warning' ? 'warn' : 'ok';
+      bar.hidden = !available;
+      bar.className = `resource-bar ${tone}`;
+      bar.textContent = available ? progressBar(Math.max(0, Math.min(100, usage)), 100, 10) : '';
+      percent.className = `percent trend-link ${tone}`;
+      percent.textContent = available ? formatPercent(usage) : '--';
+      percent.setAttribute('aria-label', `${node.metadata.name} CPU history, ${percent.textContent}`);
+      for (const { direction, speed, text } of directions) {
+        const value = node.report?.network?.[direction];
+        text.textContent = node.online ? formatSpeed(value) : '--';
+        speed.className = `direction ${direction} trend-link`;
+        if (!node.online) {
+          speed.classList.add('danger');
+        } else if (value == null) {
+          speed.classList.add('muted');
+        } else {
+          addTone(speed, networkTone(value), true);
+        }
+        speed.setAttribute('aria-label', `${node.metadata.name} network history, ${direction === 'down' ? 'download' : 'upload'} ${text.textContent}`);
+      }
+    },
+  };
 }
 
 type NodeRow = {
@@ -113,7 +142,13 @@ function createNodeRow(uuid: string, handlers: NodeListHandlers): NodeRow {
   name.addEventListener('pointerleave', cancelIntent);
   name.addEventListener('blur', cancelIntent);
   nodeCell.append(status, name);
-  row.append(nodeCell);
+  const trends = createMetricLinks(uuid, handlers);
+  const memory = element('div', 'resource resource-mem');
+  memory.dataset.mobileLabel = 'MEM';
+  const disk = element('div', 'resource resource-disk');
+  disk.dataset.mobileLabel = 'DISK';
+  const traffic = createTrafficCell();
+  row.append(nodeCell, trends.cpu, memory, disk, trends.network, traffic.cell);
   let flag: HTMLImageElement | null = null;
 
   const update = (node: NodeState): void => {
@@ -135,16 +170,10 @@ function createNodeRow(uuid: string, handlers: NodeListHandlers): NodeRow {
     }
 
     const report = node.report;
-    while (nodeCell.nextElementSibling) {
-      nodeCell.nextElementSibling.remove();
-    }
-    row.append(
-      resourceCell(report?.cpuUsage ?? null, node.online, 'cpu'),
-      resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online, 'mem'),
-      resourceCell(resourceRatio(report?.disk?.used, report?.disk?.total), node.online, 'disk'),
-      networkCell(node),
-      renderTrafficCell(node),
-    );
+    trends.update(node);
+    renderResource(memory, resourceRatio(report?.ram?.used, report?.ram?.total), node.online);
+    renderResource(disk, resourceRatio(report?.disk?.used, report?.disk?.total), node.online);
+    traffic.update(node);
   };
   return { row, update };
 }

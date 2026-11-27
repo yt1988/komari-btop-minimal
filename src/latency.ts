@@ -55,7 +55,8 @@ export type LatencySegment = {
 export type LatencyReadoutEntry = {
   taskId: string;
   label: string;
-  value: number;
+  timestamp: number | null;
+  value: number | null;
   loss: number | null;
 };
 
@@ -173,20 +174,23 @@ export function latencySeriesColor(taskId: string, _allTaskIds: readonly string[
   return LATENCY_SERIES_COLORS[seriesIndex(taskId) % LATENCY_SERIES_COLORS.length]!;
 }
 
-function nearestLatencyPoint(series: LatencySeries, timestamp: number): LatencyPoint & { value: number } | null {
-  let nearest: LatencyPoint & { value: number } | null = null;
-  let distance = Number.POSITIVE_INFINITY;
+function pointAtTime(series: LatencySeries, timestamp: number, rawIntervalMs: number): LatencyPoint | null {
+  const bucketWidth = (series.intervalSeconds ?? 0) * 1000;
+  let match: LatencyPoint | null = null;
+  let distance = Infinity;
   for (const point of series.points) {
-    if (typeof point.value !== 'number' || !Number.isFinite(point.value) || point.value < 0) {
-      continue;
-    }
-    const candidateDistance = Math.abs(point.timestamp - timestamp);
-    if (candidateDistance < distance) {
-      nearest = point as LatencyPoint & { value: number };
-      distance = candidateDistance;
+    const offset = timestamp - point.timestamp;
+    // Komari timestamps an aggregate at the beginning of its bucket.
+    if (bucketWidth > 0) {
+      if (offset >= 0 && offset < bucketWidth && (!match || point.timestamp > match.timestamp)) {
+        match = point;
+      }
+    } else if (Math.abs(offset) <= rawIntervalMs / 2 && Math.abs(offset) < distance) {
+      match = point;
+      distance = Math.abs(offset);
     }
   }
-  return nearest;
+  return match;
 }
 
 export function formatLatencyTimestamp(timestamp: number, rangeHours: number): string {
@@ -201,33 +205,20 @@ export function latencyReadoutEntries(
   timestamp: number,
   series: LatencySeries[],
   labels: Map<string, string>,
+  sampleInterval: (series: LatencySeries) => number,
 ): LatencyReadoutEntry[] {
-  const entries: LatencyReadoutEntry[] = [];
-  for (const lineSeries of series) {
-    const point = nearestLatencyPoint(lineSeries, timestamp);
-    if (point) {
-      entries.push({
-        taskId: lineSeries.taskId,
-        label: labels.get(lineSeries.taskId) ?? lineSeries.label,
-        value: point.value,
-        loss: point.loss ?? null,
-      });
-    }
-  }
-  return entries;
-}
-
-export function formatLatencyReadout(
-  timestamp: number,
-  series: LatencySeries[],
-  labels: Map<string, string>,
-  rangeHours: number,
-): string {
-  const values = [formatLatencyTimestamp(timestamp, rangeHours)];
-  for (const entry of latencyReadoutEntries(timestamp, series, labels)) {
-    values.push(`${entry.label} ${entry.value.toFixed(1)}ms`);
-  }
-  return values.join(' · ');
+  return series.map((lineSeries) => {
+    const point = pointAtTime(lineSeries, timestamp, sampleInterval(lineSeries));
+    // Komari uses -1 as the value for a lost probe, including an all-loss average.
+    const loss = point?.value === -1 ? 1 : point?.loss ?? null;
+    return {
+      taskId: lineSeries.taskId,
+      label: labels.get(lineSeries.taskId) ?? lineSeries.label,
+      timestamp: point?.timestamp ?? null,
+      value: point && validPoint(point) && loss !== 1 ? point.value : null,
+      loss,
+    };
+  });
 }
 
 /**

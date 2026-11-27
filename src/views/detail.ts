@@ -1,16 +1,17 @@
 import { formatBytes, formatLoss, formatPercent, formatSpeed, lossTone, metricTone, networkTone } from '../format';
-import type { LatencyQuery, NodeState } from '../domain';
+import type { HistoryMetric, LatencyQuery, NodeState } from '../domain';
 import { LATENCY_RANGES, latencySeriesColor, latencyStats } from '../latency';
 import type { LatencyColorAssignment } from '../latencyColors';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
+import { createTrafficCell } from './traffic';
 import { renderLatencyChart, setChartOffline } from './chart';
 import { renderStatusButton, renderStatusPanel, type StatusView } from './status';
-import { renderTrafficCell } from './traffic';
 
 export type DetailHandlers = {
   onBack: () => void;
   onRangeChange: (hours: number) => void;
-  onLatencyRetry: () => void;
+  onHistoryRetry: () => void;
+  onMetricChange: (metric: HistoryMetric) => void;
   onTaskToggle: (taskId: string) => void;
 };
 
@@ -18,10 +19,12 @@ export type DetailOptions = {
   node: NodeState | null;
   status: StatusView;
   targets: ReadonlyMap<string, string>;
-  latency: LatencyQuery | null;
-  latencyState: 'loading' | 'ready' | 'error';
-  latencyRange: number;
-  displayedLatencyRange: number | null;
+  metric: HistoryMetric;
+  probeIntervals: ReadonlyMap<string, number>;
+  history: LatencyQuery | null;
+  historyState: 'loading' | 'ready' | 'error';
+  historyRange: number;
+  displayedHistoryRange: number | null;
   chinese: boolean;
   visibleTaskIds: string[];
   colorAssignments: LatencyColorAssignment;
@@ -81,41 +84,59 @@ function updateDetailName(container: HTMLElement, node: NodeState | null): void 
   container.replaceChildren(button);
 }
 
-function appendMetricRow(container: HTMLElement, node: NodeState | null): void {
+function createMetricRow(onMetricChange: DetailHandlers['onMetricChange']) {
   const row = element('div', 'metric-row');
-  if (!node) {
-    container.replaceChildren(row);
-    return;
-  }
-  const report = node.report;
-  const cpu = element('div', `metric metric-cpu ${!node.online ? 'danger' : report?.cpuUsage === null || report?.cpuUsage === undefined ? 'muted' : metricTone(report.cpuUsage) === 'warning' ? 'warn' : 'ok'}`);
+  const cpu = element('div', 'metric metric-cpu');
   cpu.dataset.mobileLabel = 'CPU';
-  cpu.textContent = report?.cpuUsage === null || report?.cpuUsage === undefined ? '--' : formatPercent(report.cpuUsage);
+  const cpuButton = element('button', 'trend-link');
+  cpuButton.type = 'button';
+  cpuButton.addEventListener('click', () => onMetricChange('cpu'));
+  cpu.append(cpuButton);
 
-  const memory = element('div', `metric metric-mem ${!node.online ? 'danger' : report?.ram ? 'ok' : 'muted'}`);
+  const memory = element('div', 'metric metric-mem');
   memory.dataset.mobileLabel = 'MEM';
-  memory.textContent = report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--';
-
-  const disk = element('div', `metric metric-disk ${!node.online ? 'danger' : report?.disk ? 'ok' : 'muted'}`);
+  const disk = element('div', 'metric metric-disk');
   disk.dataset.mobileLabel = 'DISK';
-  disk.textContent = report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--';
-
-  const network = element('div', `metric metric-network ${!node.online ? 'danger' : report?.network ? 'ok' : 'muted'}`);
+  const network = element('div', 'metric metric-network');
   network.dataset.mobileLabel = 'NETWORK';
-  for (const [direction, value] of [['down', report?.network?.down], ['up', report?.network?.up]] as const) {
-    const tone = !node.online ? 'danger' : typeof value !== 'number' ? 'muted' : networkTone(value) === 'warning' ? 'warn' : 'ok';
-    const item = element('span', `direction ${tone}`);
+  const directions = (['down', 'up'] as const).map((direction) => {
+    const button = element('button', 'direction trend-link');
+    button.type = 'button';
+    button.addEventListener('click', () => onMetricChange('network'));
     const arrow = element('span', 'direction-arrow');
     arrow.textContent = direction === 'down' ? '↓' : '↑';
     const text = element('span', 'direction-value');
-    text.textContent = typeof value === 'number' ? formatSpeed(value) : '--';
-    item.append(arrow, text);
-    network.append(item);
-  }
+    button.append(arrow, text);
+    network.append(button);
+    return { direction, button, text };
+  });
+  const traffic = createTrafficCell('metric metric-traffic traffic');
+  row.append(cpu, memory, disk, network, traffic.cell);
 
-  row.append(cpu, memory, disk, network, renderTrafficCell(node, 'metric metric-traffic traffic'));
-  container.replaceChildren(row);
+  return {
+    row,
+    update(node: NodeState): void {
+      const report = node.report;
+      const tone = (value: boolean, warning = false) => !node.online ? 'danger' : !value ? 'muted' : warning ? 'warn' : 'ok';
+      cpu.className = `metric metric-cpu ${tone(report?.cpuUsage != null, metricTone(report?.cpuUsage) === 'warning')}`;
+      cpuButton.textContent = formatPercent(report?.cpuUsage);
+      cpuButton.setAttribute('aria-label', `CPU history, ${cpuButton.textContent}`);
+      memory.className = `metric metric-mem ${tone(!!report?.ram)}`;
+      memory.textContent = report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--';
+      disk.className = `metric metric-disk ${tone(!!report?.disk)}`;
+      disk.textContent = report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--';
+      for (const { direction, button, text } of directions) {
+        const value = report?.network?.[direction];
+        button.className = `direction trend-link ${tone(value != null, networkTone(value) === 'warning')}`;
+        text.textContent = formatSpeed(value);
+        button.setAttribute('aria-label', `Network history, ${direction === 'down' ? 'download' : 'upload'} ${text.textContent}`);
+      }
+      traffic.update(node);
+    },
+  };
 }
+
+const metricRows = new WeakMap<HTMLElement, ReturnType<typeof createMetricRow>>();
 
 function renderCore(container: HTMLElement, node: NodeState | null, view: StatusView, handlers: DetailHandlers): void {
   const control = element('div', 'detail-control');
@@ -148,7 +169,12 @@ function renderCore(container: HTMLElement, node: NodeState | null, view: Status
   });
   const rowContainer = element('div', 'metric-row-container');
   table.append(heading, rowContainer);
-  appendMetricRow(rowContainer, node);
+  if (node) {
+    const metrics = createMetricRow(handlers.onMetricChange);
+    metricRows.set(rowContainer, metrics);
+    metrics.update(node);
+    rowContainer.append(metrics.row);
+  }
   container.replaceChildren(control, title, table);
 }
 
@@ -163,7 +189,9 @@ export function updateDetailCore(container: HTMLElement, node: NodeState | null,
   renderStatusButton(status, node, view);
   renderStatusPanel(panel, view);
   updateDetailName(title, node);
-  appendMetricRow(row, node);
+  if (node) {
+    metricRows.get(row)?.update(node);
+  }
 }
 
 const renderedLatency = new WeakMap<HTMLElement, { query: LatencyQuery | null; key: string }>();
@@ -171,11 +199,13 @@ const renderedLatency = new WeakMap<HTMLElement, { query: LatencyQuery | null; k
 /** Everything besides the query object that shapes the latency section. */
 function latencySignature(options: DetailOptions): string {
   return JSON.stringify([
-    options.latencyState,
-    options.latencyRange,
-    options.displayedLatencyRange,
+    options.metric,
+    options.historyState,
+    options.historyRange,
+    options.displayedHistoryRange,
     options.visibleTaskIds,
     [...options.targets],
+    [...options.probeIntervals],
     [...options.colorAssignments],
     options.overflowTaskIds,
   ]);
@@ -193,7 +223,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     // Redraws triggered by live data, the node list or task names leave the latency
     // inputs unchanged; keep the charts so a hover readout is not interrupted.
     const kept = renderedLatency.get(section);
-    if (options.node && kept && kept.query === options.latency && kept.key === latencyKey) {
+    if (options.node && kept && kept.query === options.history && kept.key === latencyKey) {
       section.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, options.status.outages ?? []));
       return;
     }
@@ -216,33 +246,59 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     return;
   }
 
-  const taskLabels = new Map(options.targets);
+  const resource = options.metric !== 'latency' ? options.metric : undefined;
+  const taskLabels = resource === 'cpu' ? new Map([['cpu.usage', 'CPU']])
+    : resource === 'network' ? new Map([
+      ['net.in.rate', options.chinese ? '↓ 下载' : '↓ download'],
+      ['net.out.rate', options.chinese ? '↑ 上传' : '↑ upload'],
+    ]) : new Map(options.targets);
+  const colors = resource ? new Map([
+    ['cpu.usage', '#35f477'],
+    ['net.in.rate', '#56aaff'],
+    ['net.out.rate', '#ffc45b'],
+  ]) : options.colorAssignments;
   const taskIds = [...taskLabels.keys()];
 
   const latencySection = element('section', 'latency');
   const heading = element('div', 'latency-heading');
   const title = element('h2', 'latency-title');
-  title.textContent = 'latency';
+  title.textContent = resource === 'cpu' ? 'CPU' : resource === 'network' ? 'network' : 'latency';
+  const chooseLatency = element('button', 'range');
+  chooseLatency.type = 'button';
+  chooseLatency.textContent = options.chinese ? '延迟' : 'latency';
+  chooseLatency.addEventListener('click', () => options.handlers.onMetricChange('latency'));
 
   const controls = element('div', 'latency-left');
   const ranges = element('div', 'range-set');
   ranges.setAttribute('role', 'group');
-  ranges.setAttribute('aria-label', 'Latency range');
+  ranges.setAttribute('aria-label', resource ? 'History range' : 'Latency range');
   LATENCY_RANGES.forEach((range) => {
-    const button = element('button', `range${options.latencyRange === range.hours ? ' active' : ''}`);
+    const button = element('button', `range${options.historyRange === range.hours ? ' active' : ''}`);
     button.type = 'button';
     button.textContent = range.label;
-    button.setAttribute('aria-pressed', String(options.latencyRange === range.hours));
+    button.setAttribute('aria-pressed', String(options.historyRange === range.hours));
     button.addEventListener('click', () => options.handlers.onRangeChange(range.hours));
     ranges.append(button);
   });
   controls.append(title, ranges);
+  if (resource) {
+    controls.append(chooseLatency);
+  }
   heading.append(controls);
 
   const probes = element('div', 'probe-set');
   probes.setAttribute('role', 'group');
-  probes.setAttribute('aria-label', 'Visible latency targets');
+  probes.setAttribute('aria-label', resource ? 'Chart series' : 'Visible latency targets');
   taskIds.forEach((taskId) => {
+    if (resource) {
+      const item = element('span', 'probe');
+      const swatch = element('span', 'probe-swatch');
+      swatch.style.backgroundColor = colors.get(taskId) ?? '';
+      swatch.setAttribute('aria-hidden', 'true');
+      item.append(swatch, taskLabels.get(taskId) ?? taskId);
+      probes.append(item);
+      return;
+    }
     const button = element('button', `probe${options.visibleTaskIds.includes(taskId) ? ' active' : ''}`);
     button.type = 'button';
     const dot = element('span', 'probe-swatch');
@@ -253,7 +309,7 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     label.textContent = taskLabels.get(taskId) ?? taskId;
     button.append(label);
     // Range totals: mean of replied probes, ±jitter, loss.
-    const stats = latencyStats(options.latency?.series.find((series) => series.taskId === taskId)?.points ?? []);
+    const stats = latencyStats(options.history?.series.find((series) => series.taskId === taskId)?.points ?? []);
     if (stats.mean !== null) {
       const mean = element('span', 'probe-stat');
       mean.textContent = `${Math.round(stats.mean)}ms`;
@@ -277,12 +333,12 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   latencySection.append(heading);
 
   const chart = element('div', 'chart-container');
-  chart.dataset.role = 'latency-chart';
-  const displayedRange = options.displayedLatencyRange;
-  if (options.latencyState !== 'ready') {
+  chart.dataset.role = resource ? 'resource-chart' : 'latency-chart';
+  const displayedRange = options.displayedHistoryRange;
+  if (options.historyState !== 'ready') {
     const rangeLabel = (hours: number) => LATENCY_RANGES.find((range) => range.hours === hours)?.label ?? `${hours}h`;
-    const requested = rangeLabel(options.latencyRange);
-    const failed = options.latencyState === 'error';
+    const requested = rangeLabel(options.historyRange);
+    const failed = options.historyState === 'error';
     const status = element('div', `chart-message ${failed ? 'danger' : 'muted'}`);
     const label = element('span');
     label.setAttribute('role', failed ? 'alert' : 'status');
@@ -298,20 +354,23 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
       const retry = element('button', 'retry');
       retry.type = 'button';
       retry.textContent = options.chinese ? '重试' : 'retry';
-      retry.addEventListener('click', options.handlers.onLatencyRetry);
+      retry.addEventListener('click', options.handlers.onHistoryRetry);
       status.append(' ', retry);
     }
     latencySection.append(status);
   }
-  if (displayedRange !== null && options.latency) {
+  if (displayedRange !== null && options.history) {
     renderLatencyChart(chart, {
-      query: options.latency,
-      visibleTaskIds: options.visibleTaskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
+      query: options.history,
+      visibleTaskIds: resource ? taskIds : options.visibleTaskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
       allTaskIds: taskIds,
-      colorAssignments: options.colorAssignments,
+      colorAssignments: colors,
       labels: taskLabels,
       rangeHours: displayedRange,
+      chinese: options.chinese,
+      probeIntervals: options.probeIntervals,
       offline: options.status.outages ?? [],
+      resource,
       laneTaskIds: taskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
     });
   }
@@ -323,19 +382,21 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     const heading = element('h3', 'latency-overflow-title');
     heading.textContent = `${taskLabels.get(taskId) ?? taskId} latency`;
     const overflowChart = element('div', 'chart-container latency-overflow-chart');
-    const overflowSeries = options.latency?.series.filter((series) => series.taskId === taskId) ?? [];
-    if (displayedRange === null || !options.latency || overflowSeries.length === 0) {
+    const overflowSeries = options.history?.series.filter((series) => series.taskId === taskId) ?? [];
+    if (displayedRange === null || !options.history || overflowSeries.length === 0) {
       const empty = element('div', 'chart-message muted');
       empty.textContent = 'no latency records';
       overflowChart.append(empty);
     } else {
       renderLatencyChart(overflowChart, {
-        query: { ...options.latency, series: overflowSeries },
+        query: { ...options.history, series: overflowSeries },
         visibleTaskIds: [taskId],
         allTaskIds: [taskId],
         colorAssignments: new Map([[taskId, latencySeriesColor(taskId)]]) as LatencyColorAssignment,
         labels: taskLabels,
         rangeHours: displayedRange,
+        chinese: options.chinese,
+        probeIntervals: options.probeIntervals,
         offline: options.status.outages ?? [],
       });
     }
@@ -344,6 +405,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   });
 
   section.append(latencySection);
-  renderedLatency.set(section, { query: options.latency, key: latencyKey });
+  renderedLatency.set(section, { query: options.history, key: latencyKey });
 }
 
