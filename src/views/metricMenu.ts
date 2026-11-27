@@ -1,10 +1,10 @@
 import type { HistoryMetric } from '../domain';
 
 const metricLabels: Record<HistoryMetric, string> = {
-  latency: 'LATENCY',
   cpu: 'CPU',
   mem: 'MEM',
   network: 'NETWORK',
+  latency: 'LATENCY',
 };
 
 export function createMetricMenu(onSelect: (metric: HistoryMetric) => void) {

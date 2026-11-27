@@ -312,7 +312,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     if (offline.some((interval) => timestamp >= interval.start && timestamp <= interval.end)) {
       const down = document.createElement('span');
       down.className = 'danger';
-      down.textContent = 'down';
+      down.textContent = 'offline';
       readout.append(document.createTextNode(' · '), down);
     }
     entries.forEach((entry) => {

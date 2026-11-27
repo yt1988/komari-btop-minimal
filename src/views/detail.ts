@@ -268,11 +268,11 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   }
 
   const resource = options.metric !== 'latency' ? options.metric : undefined;
-  const taskLabels = resource === 'cpu' ? new Map([['cpu.usage', 'CPU']])
+  const taskLabels = resource === 'cpu' ? new Map([['cpu.usage', 'CPU usage']])
     : resource === 'mem' ? new Map([['memory.used', 'Memory used']])
     : resource === 'network' ? new Map([
-      ['net.in.rate', '↓ Download'],
-      ['net.out.rate', '↑ Upload'],
+      ['net.in.rate', '↓ DOWN'],
+      ['net.out.rate', '↑ UP'],
     ]) : new Map(options.targets);
   const colors = resource ? new Map([
     ['cpu.usage', '#35f477'],

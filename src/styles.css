@@ -1,7 +1,8 @@
 :root {
   --duplex-column: 12.5ch;
   --duplex-gap: 8px;
-  --traffic-progress-width: 12ch;
+  --direction-slot: calc(1ch + 6px);
+  --traffic-progress-width: 80px;
   --traffic-rule-word-size: 7px;
   color-scheme: dark;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
@@ -279,14 +280,14 @@ button {
 
 .direction {
   display: grid;
-  grid-template-columns: 1ch minmax(0, 1fr);
+  grid-template-columns: var(--direction-slot) minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
   min-width: 0;
   white-space: nowrap;
 }
 
 .direction-arrow {
+  width: 1ch;
   text-align: center;
 }
 
@@ -319,14 +320,18 @@ button {
 
 .traffic-limit {
   display: grid;
-  grid-template-columns: 3ch minmax(0, var(--traffic-progress-width)) max-content;
+  grid-template-columns: var(--direction-slot) minmax(0, var(--traffic-progress-width)) max-content;
   align-items: center;
   width: 100%;
   max-width: 100%;
-  gap: 6px;
+  row-gap: 6px;
   color: #35f477;
-  font-size: 11px;
   line-height: 1;
+}
+
+.traffic-rule,
+.traffic-limit .limit-text {
+  font-size: 11px;
 }
 
 .traffic-rule {
@@ -384,6 +389,7 @@ button {
 }
 
 .traffic-limit .limit-text {
+  margin-inline-start: 6px;
   min-width: max-content;
   overflow: visible;
   text-overflow: clip;
@@ -1211,12 +1217,17 @@ button {
     letter-spacing: -0.02em;
   }
 
+  .traffic {
+    grid-template-rows: 13px 18px auto;
+  }
+
   .traffic-limit {
-    grid-template-columns: 3ch minmax(0, 1fr);
+    grid-template-columns: var(--direction-slot) minmax(0, 1fr);
   }
 
   .traffic-limit .limit-text {
-    grid-column: 1 / -1;
+    grid-column: 2;
+    margin-inline-start: 0;
     min-width: 0;
     overflow-wrap: anywhere;
     white-space: normal;
