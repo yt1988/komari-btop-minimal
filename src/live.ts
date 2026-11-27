@@ -35,8 +35,7 @@ export function liveReportChanged(
   return previous.cpuUsage !== next.cpuUsage
     || !sameResource(previous.ram, next.ram)
     || !sameResource(previous.disk, next.disk)
-    || !sameNetwork(previous.network, next.network)
-    || previous.updatedAt !== next.updatedAt;
+    || !sameNetwork(previous.network, next.network);
 }
 
 function latestReportTimestamp(snapshot: LiveSnapshot): number | null {

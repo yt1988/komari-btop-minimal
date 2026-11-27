@@ -58,3 +58,27 @@ describe('latency cache', () => {
     expect(await cache.fetch('node', 24)).toEqual(query(2));
   });
 });
+
+it('limits prefetch to one query and keeps only the request needed by the selected view', async () => {
+  const pending: { hours: number; signal: AbortSignal; complete: () => void }[] = [];
+  const cache = createLatencyCache((uuid, hours, signal) => new Promise((resolve) => {
+    pending.push({ hours, signal, complete: () => resolve(query(hours)) });
+  }));
+  cache.prefetch('node', 24, 60_000);
+  cache.prefetch('other', 24, 60_000);
+  expect(pending).toHaveLength(1);
+  const selected = cache.fetch('node', 24);
+  cache.cancelExcept('node', 24);
+  expect(pending[0]!.signal.aborted).toBe(false);
+
+  cache.cancelExcept('node', 7);
+  await expect((async () => {
+    pending[0]!.complete();
+    return selected;
+  })()).rejects.toMatchObject({ name: 'AbortError' });
+  expect(cache.peek('node', 24)).toBeNull();
+
+  const next = cache.fetch('node', 7);
+  pending[1]!.complete();
+  expect(await next).toEqual(query(7));
+});

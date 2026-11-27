@@ -23,7 +23,7 @@ describe('live snapshot reconciliation', () => {
 
     expect(result).not.toBeNull();
     expect(result?.reports.has('node-b')).toBe(false);
-    expect(result?.changedUuids).toEqual(new Set(['node-a', 'node-b']));
+    expect(result?.changedUuids).toEqual(new Set(['node-b']));
     expect(result?.onlineChangedUuids).toEqual(new Set(['node-b']));
   });
 
@@ -61,4 +61,16 @@ describe('live snapshot reconciliation', () => {
       network: { up: 0, down: null, totalUp: null, totalDown: 0 },
     });
   });
+});
+
+it('preserves fresh report timestamps without marking unchanged metrics dirty', () => {
+  const result = reconcileLiveSnapshot(
+    new Set(['node-a']),
+    new Map([['node-a', report(100)]]),
+    { online: ['node-a'], data: { 'node-a': report(200) } },
+    100,
+  );
+  expect(result?.latestTimestamp).toBe(200);
+  expect(result?.reports.get('node-a')?.updatedAt).toBe(200);
+  expect(result?.changedUuids.size).toBe(0);
 });

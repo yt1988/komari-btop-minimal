@@ -1,6 +1,6 @@
 import type { LatencyQuery } from './domain';
 
-export type LatencyLoader = (uuid: string, hours: number) => Promise<LatencyQuery>;
+export type LatencyLoader = (uuid: string, hours: number, signal: AbortSignal) => Promise<LatencyQuery>;
 
 export type LatencyCache = {
   /** A result younger than the cache's maximum age, with its age. */
@@ -8,7 +8,8 @@ export type LatencyCache = {
   /** Loads fresh data, sharing a request already in flight for the same node and range. */
   fetch: (uuid: string, hours: number) => Promise<LatencyQuery>;
   /** Warms the cache unless it already holds a result younger than `freshMs`. */
-  prefetch: (uuid: string, hours: number, freshMs: number) => void;
+  prefetch: (uuid: string, hours: number, freshMs: number, onError?: (error: unknown) => void) => void;
+  cancelExcept: (uuid?: string, hours?: number) => void;
 };
 
 /**
@@ -24,7 +25,7 @@ export function createLatencyCache(
   const maxEntries = options.maxEntries ?? 24;
   const now = options.now ?? Date.now;
   const entries = new Map<string, { query: LatencyQuery; at: number }>();
-  const inflight = new Map<string, Promise<LatencyQuery>>();
+  const inflight = new Map<string, { request: Promise<LatencyQuery>; controller: AbortController }>();
   const key = (uuid: string, hours: number): string => `${uuid}:${hours}`;
 
   const peek: LatencyCache['peek'] = (uuid, hours) => {
@@ -37,9 +38,11 @@ export function createLatencyCache(
     const id = key(uuid, hours);
     const pending = inflight.get(id);
     if (pending) {
-      return pending;
+      return pending.request;
     }
-    const request = load(uuid, hours).then((query) => {
+    const controller = new AbortController();
+    const request = load(uuid, hours, controller.signal).then((query) => {
+      controller.signal.throwIfAborted();
       entries.delete(id);
       entries.set(id, { query, at: now() });
       // Maps keep insertion order, so the first key is the least recently stored.
@@ -47,19 +50,31 @@ export function createLatencyCache(
         entries.delete(entries.keys().next().value!);
       }
       return query;
+    }).catch((error: unknown) => {
+      controller.signal.throwIfAborted();
+      throw error;
     }).finally(() => {
-      inflight.delete(id);
+      if (inflight.get(id)?.controller === controller) inflight.delete(id);
     });
-    inflight.set(id, request);
+    inflight.set(id, { request, controller });
     return request;
   };
 
-  const prefetch: LatencyCache['prefetch'] = (uuid, hours, freshMs) => {
+  const prefetch: LatencyCache['prefetch'] = (uuid, hours, freshMs, onError) => {
+    if (inflight.size > 0) return;
     const cached = peek(uuid, hours);
     if (!cached || cached.ageMs > freshMs) {
-      fetch(uuid, hours).catch(() => undefined);
+      fetch(uuid, hours).catch((error: unknown) => onError?.(error));
     }
   };
 
-  return { peek, fetch, prefetch };
+  const cancelExcept: LatencyCache['cancelExcept'] = (uuid, hours) => {
+    for (const [id, pending] of inflight) {
+      if (uuid !== undefined && hours !== undefined && id === key(uuid, hours)) continue;
+      inflight.delete(id);
+      pending.controller.abort();
+    }
+  };
+
+  return { peek, fetch, prefetch, cancelExcept };
 }

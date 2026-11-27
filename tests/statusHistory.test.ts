@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseLoadRecordTimes } from '../src/api/komari';
 import { formatDayClock, formatDuration } from '../src/format';
-import { buildOutages } from '../src/statusHistory';
+import { buildOutages, createOutageHistory } from '../src/statusHistory';
 
 const at = (time: string, day = 22): number => Date.parse(`2026-10-${day}T${time}:00Z`);
 
@@ -78,4 +78,27 @@ describe('outage history', () => {
     expect([formatDuration(20_000), formatDuration(47 * 60_000), formatDuration(65 * 60_000), formatDuration(120 * 60_000), formatDuration(51 * 3_600_000)])
       .toEqual(['1m', '47m', '1h5m', '2h', '2d3h']);
   });
+});
+
+it('reuses completed intervals and recomputes across exact rolling boundaries', () => {
+  const memo = createOutageHistory();
+  const sixHours = 6 * 3_600_000;
+  const day = 24 * 3_600_000;
+  const input = {
+    now,
+    coarseTimes: [now - day, now - sixHours, now - sixHours + 480_000],
+    fineTimes: [now - sixHours, now - sixHours + 480_000, now - 60_000, now + 30_000],
+    online: false,
+    lastReportAt: now - 60_000,
+    createdAt: old,
+  };
+  const first = memo(input);
+  expect(first).toEqual(buildOutages(input));
+  for (const offset of [1, 29999, 30000, 480000, 480001, 3_600_000, -1000]) {
+    const later = { ...input, now: now + offset };
+    expect(memo(later)).toEqual(buildOutages(later));
+  }
+  const stable = { ...input, now: now + 490_000, online: true };
+  const completed = memo(stable);
+  expect(memo({ ...stable, now: stable.now + 100 }).at(-1)).toBe(completed.at(-1));
 });

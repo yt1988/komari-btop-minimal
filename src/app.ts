@@ -10,7 +10,7 @@ import {
   type LiveSocketStatus,
 } from './api/komari';
 import type { HistoryMetric, LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
-import { reconcileLiveSnapshot } from './live';
+import { liveReportChanged, reconcileLiveSnapshot } from './live';
 import { formatTimestamp } from './format';
 import { parseLatencyRange, resolveLatencyTargets, toggleVisibleTasks } from './latency';
 import {
@@ -21,17 +21,18 @@ import {
 } from './latencyColors';
 import { legacyRoutePath, parseRoute as parseBrowserRoute, routePath, type Route } from './router';
 import { createLatencyCache } from './latencyCache';
-import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, buildOutages } from './statusHistory';
+import { STATUS_FINE_HOURS, STATUS_HISTORY_HOURS, createOutageHistory } from './statusHistory';
 import { setChartOffline } from './views/chart';
 import { dismissMetricMenuOutside, renderDetailView, updateDetailCore } from './views/detail';
 import { renderNodeList, updateNodeRows } from './views/nodes';
-import { renderNodeSwitcher } from './views/switcher';
+import { renderNodeSwitcher, updateNodeSwitcher } from './views/switcher';
 import type { StatusView } from './views/status';
 
 const DEFAULT_LATENCY_HOURS = 24;
 const HISTORY_REFRESH_MS = 60_000;
 const LIVE_REFRESH_MS = 3000;
 const LIVE_STALE_MS = 3 * LIVE_REFRESH_MS;
+const HIDDEN_SOCKET_GRACE_MS = 30_000;
 
 type HistoryStatus = 'loading' | 'ready' | 'error';
 type MetadataStatus = 'loading' | 'ready' | 'error' | 'denied';
@@ -133,6 +134,10 @@ export function startApp(root: HTMLElement): () => void {
     throw new Error('Missing application shell elements');
   }
 
+  const accessMessage = document.createElement('div');
+  accessMessage.className = 'empty-state muted';
+  accessMessage.setAttribute('role', 'status');
+  page.before(accessMessage);
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
   const startedAt = Date.now();
   clearLegacyNodeCache();
@@ -159,15 +164,27 @@ export function startApp(root: HTMLElement): () => void {
     statusFine: null,
     statusCoarse: null,
   };
+  let metadataByUuid = new Map<string, NodeMetadata>();
+  const knownOnlineState = new Set<string>();
+  let foreground = false;
+  let verifying = true;
+  let lastTick = Date.now();
+  let hiddenAt: number | null = null;
+  let socketCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  let timestampTimer: ReturnType<typeof setInterval> | null = null;
+  let siteNameLoaded = false;
+  let siteController: AbortController | null = null;
+  let tasksController: AbortController | null = null;
+  let historyPending = false;
   let statusController: AbortController | null = null;
   let statusRequestId = 0;
   let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let statusCoarseAt = 0;
   const newHistoryCaches = () => ({
     latency: createLatencyCache(fetchLatency),
-    cpu: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'cpu')),
-    mem: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'mem')),
-    network: createLatencyCache((uuid, hours) => fetchResourceHistory(uuid, hours, 'network')),
+    cpu: createLatencyCache((uuid, hours, signal) => fetchResourceHistory(uuid, hours, 'cpu', signal)),
+    mem: createLatencyCache((uuid, hours, signal) => fetchResourceHistory(uuid, hours, 'mem', signal)),
+    network: createLatencyCache((uuid, hours, signal) => fetchResourceHistory(uuid, hours, 'network', signal)),
   });
   let historyCaches = newHistoryCaches();
   let historyRequestId = 0;
@@ -187,9 +204,13 @@ export function startApp(root: HTMLElement): () => void {
     }
   })();
 
+  let serializedColors: string | null = null;
   const persistLatencyColors = (): void => {
     try {
-      window.sessionStorage.setItem('komari-btop-minimal:latency-colors:v1', JSON.stringify(serializeLatencyColorRegistry(latencyColorRegistry)));
+      const value = JSON.stringify(serializeLatencyColorRegistry(latencyColorRegistry));
+      if (value === serializedColors) return;
+      window.sessionStorage.setItem('komari-btop-minimal:latency-colors:v1', value);
+      serializedColors = value;
     } catch {
     }
   };
@@ -197,22 +218,25 @@ export function startApp(root: HTMLElement): () => void {
   // Before the first snapshot nothing is known about liveness. Treating nodes as
   // online then renders neutral "--" placeholders instead of a red offline flash
   // over the node list; the status dot itself shows the pending state.
-  const getNodeStates = (): NodeState[] => state.nodes.map((metadata) => ({
-    metadata,
-    live: state.lastUpdate !== null,
-    online: state.lastUpdate === null || state.online.has(metadata.uuid),
-    report: state.reports.get(metadata.uuid) ?? null,
-    lastReportAt: state.reports.get(metadata.uuid)?.updatedAt ?? null,
-  }));
-
+  const nodeState = (metadata: NodeMetadata): NodeState => {
+    const live = knownOnlineState.has(metadata.uuid);
+    const report = state.reports.get(metadata.uuid) ?? null;
+    return {
+      metadata,
+      live,
+      online: !live || state.online.has(metadata.uuid),
+      report,
+      lastReportAt: report?.updatedAt ?? null,
+    };
+  };
+  const getNodeStates = (): NodeState[] => state.nodes.map(nodeState);
   const getCurrentNode = (): NodeState | null => {
-    const route = state.route;
-    if (route.type !== 'detail') {
-      return null;
-    }
-    return getNodeStates().find((node) => node.metadata.uuid === route.uuid) ?? null;
+    if (state.route.type !== 'detail') return null;
+    const metadata = metadataByUuid.get(state.route.uuid);
+    return metadata ? nodeState(metadata) : null;
   };
 
+  let outageHistory = createOutageHistory();
   const getStatusView = (node: NodeState | null): StatusView => {
     const now = Date.now();
     const input = {
@@ -223,28 +247,26 @@ export function startApp(root: HTMLElement): () => void {
       lastReportAt: node?.lastReportAt ?? null,
       createdAt: node?.metadata.createdAt ?? null,
     };
-    const outages = node && state.statusCoarse !== null ? buildOutages(input) : null;
+    const outages = node && state.statusCoarse !== null ? outageHistory(input) : null;
     return {
       outages,
       now,
     };
   };
 
-  const updateCore = (): void => {
+  const updateCore = (redrawOutages = false): void => {
     const core = page.querySelector<HTMLElement>('.detail-core');
-    if (core && state.route.type === 'detail') {
-      const node = getCurrentNode();
-      updateDetailCore(core, node, getStatusView(node));
+    if (!core || state.route.type !== 'detail') return;
+    const node = getCurrentNode();
+    const view = getStatusView(node);
+    updateDetailCore(core, node, view);
+    if (redrawOutages) {
+      page.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, view.outages ?? []));
     }
   };
 
-  // Records arrive after the chart, so only the status and the charts' offline
-  // bands change; redrawing the charts would drop an in-progress hover readout.
-  const applyOutages = (): void => {
-    updateCore();
-    const outages = getStatusView(getCurrentNode()).outages ?? [];
-    page.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, outages));
-  };
+  // Records arrive after the chart, so only its offline bands and the status need to change.
+  const applyOutages = (): void => updateCore(true);
 
   const clearStatusRefresh = (): void => {
     if (statusRefreshTimer !== null) {
@@ -259,6 +281,7 @@ export function startApp(root: HTMLElement): () => void {
    * most every 10 minutes.
    */
   const loadStatusRecords = (uuid: string): void => {
+    if (!foreground || verifying || !metadataByUuid.has(uuid)) return;
     clearStatusRefresh();
     statusController?.abort();
     const requestId = ++statusRequestId;
@@ -280,11 +303,11 @@ export function startApp(root: HTMLElement): () => void {
       applyOutages();
       statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 120_000);
     }).catch((error: unknown) => {
-      recheckAccess(error);
       const aborted = error instanceof DOMException && error.name === 'AbortError';
       if (stopped || requestId !== statusRequestId || aborted) {
         return;
       }
+      if (recheckAccess(error)) return;
       statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 60_000);
     }).finally(() => {
       if (statusController === controller) {
@@ -321,7 +344,7 @@ export function startApp(root: HTMLElement): () => void {
   const updateLiveConnection = (status: LiveSocketStatus): void => {
     const previous = state.liveConnection;
     state.liveConnection = status;
-    if (status === 'reconnecting' && previous !== 'reconnecting') {
+    if (foreground && !verifying && status === 'reconnecting' && previous !== 'reconnecting') {
       announce('reconnecting live telemetry');
       if (state.metadataStatus === 'ready' && metadataController === null) {
         void refreshMetadata();
@@ -329,19 +352,31 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
-  const recheckAccess = (error: unknown): void => {
-    if (!stopped && isAccessDenied(error) && state.metadataStatus === 'ready' && metadataController === null) {
-      void refreshMetadata();
-    }
+  const recheckAccess = (error: unknown): boolean => {
+    if (!foreground || stopped || !isAccessDenied(error)) return false;
+    metadataController?.abort();
+    metadataController = null;
+    metadataRequestId += 1;
+    verifying = false;
+    state.metadataStatus = 'denied';
+    clearSessionData();
+    render();
+    return true;
   };
 
   const loadSiteName = async (): Promise<void> => {
+    if (siteNameLoaded || siteController) return;
+    const controller = new AbortController();
+    siteController = controller;
     try {
-      const settings = await fetchPublicSettings();
-      if (!stopped) {
+      const settings = await fetchPublicSettings(controller.signal);
+      if (!controller.signal.aborted && !stopped) {
         siteName.textContent = settings.siteName;
+        siteNameLoaded = true;
       }
     } catch {
+    } finally {
+      if (siteController === controller) siteController = null;
     }
   };
 
@@ -355,11 +390,9 @@ export function startApp(root: HTMLElement): () => void {
     },
     // Hovering a node name warms what its detail page needs first.
     onNodeIntent: (uuid: string) => {
-      if (state.metadataStatus !== 'ready') {
-        return;
-      }
+      if (!foreground || verifying || historyPending || state.metadataStatus !== 'ready' || !metadataByUuid.has(uuid)) return;
       const hours = state.route.type === 'detail' ? state.historyRange : storedLatencyRange();
-      historyCaches.latency.prefetch(uuid, hours, HISTORY_REFRESH_MS);
+      historyCaches.latency.prefetch(uuid, hours, HISTORY_REFRESH_MS, recheckAccess);
       void ensurePingTasks();
     },
   };
@@ -371,7 +404,9 @@ export function startApp(root: HTMLElement): () => void {
     if (pingTasksRequest !== null) {
       return pingTasksRequest;
     }
-    const request = fetchPingTasks().then((tasks) => {
+    const controller = new AbortController();
+    tasksController = controller;
+    const request = fetchPingTasks(controller.signal).then((tasks) => {
       if (!stopped && pingTasksRequest === request) {
         state.tasks = tasks;
         state.tasksReady = true;
@@ -382,7 +417,7 @@ export function startApp(root: HTMLElement): () => void {
       return tasks;
     }).catch((error: unknown) => {
       if (pingTasksRequest === request) {
-        recheckAccess(error);
+        if (recheckAccess(error)) return [];
         if (!stopped && state.route.type === 'detail') {
           announce('latency targets unavailable; retrying when needed');
         }
@@ -391,6 +426,7 @@ export function startApp(root: HTMLElement): () => void {
     }).finally(() => {
       if (pingTasksRequest === request) {
         pingTasksRequest = null;
+        tasksController = null;
       }
     });
     pingTasksRequest = request;
@@ -400,6 +436,9 @@ export function startApp(root: HTMLElement): () => void {
   const render = (): void => {
     state.route = currentRoute();
     updateTimestamp();
+    if (!foreground || verifying) return;
+    if (!accessMessage.hidden) accessMessage.hidden = true;
+    if (page.hidden) page.hidden = false;
     if (state.metadataStatus !== 'ready') {
       const status = state.metadataStatus;
       const message = document.createElement('div');
@@ -489,13 +528,24 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
+  const cancelHistory = (metric?: HistoryMetric, uuid?: string, hours?: number): void => {
+    clearHistoryRefresh();
+    historyRequestId += 1;
+    historyPending = false;
+    for (const [key, cache] of Object.entries(historyCaches)) {
+      if (key === metric) cache.cancelExcept(uuid, hours);
+      else cache.cancelExcept();
+    }
+  };
+
   /**
    * Shows cached data for the node and range at once when there is any, then
    * refreshes it; `refresh` skips the cache for the periodic update.
    */
   const loadHistory = (uuid: string, metric: HistoryMetric, hours: number, refresh = false): void => {
-    clearHistoryRefresh();
-    const requestId = ++historyRequestId;
+    if (!foreground || verifying || !metadataByUuid.has(uuid)) return;
+    cancelHistory(metric, uuid, hours);
+    const requestId = historyRequestId;
     const current = (): boolean => !stopped && requestId === historyRequestId
       && state.route.type === 'detail' && state.route.uuid === uuid && (state.route.metric ?? 'latency') === metric && state.historyRange === hours;
     const cache = historyCaches[metric];
@@ -513,10 +563,12 @@ export function startApp(root: HTMLElement): () => void {
       state.historyStatus = 'loading';
       render();
     }
+    historyPending = true;
     void cache.fetch(uuid, hours).then((query) => {
       if (!current()) {
         return;
       }
+      historyPending = false;
       state.history = query;
       state.displayedHistoryRange = hours;
       state.historyStatus = 'ready';
@@ -526,7 +578,8 @@ export function startApp(root: HTMLElement): () => void {
       if (!current()) {
         return;
       }
-      recheckAccess(error);
+      historyPending = false;
+      if (recheckAccess(error)) return;
       state.historyStatus = 'error';
       render();
       historyRefreshTimer = setTimeout(() => loadHistory(uuid, metric, hours, true), 15_000);
@@ -542,7 +595,7 @@ export function startApp(root: HTMLElement): () => void {
 
   const startDetailLoads = (route: Extract<Route, { type: 'detail' }>): void => {
     loadStatusRecords(route.uuid);
-    loadRouteHistory(route);
+    if (metadataByUuid.has(route.uuid)) loadRouteHistory(route);
   };
 
   // Node switcher on detail pages: the node name toggles it under the name, and a
@@ -564,9 +617,7 @@ export function startApp(root: HTMLElement): () => void {
 
   /** Opens the list with its top-left at a viewport point, flipping above it near the bottom edge. */
   const openSwitcher = (clientX: number, clientY: number): HTMLElement | null => {
-    if (state.route.type !== 'detail') {
-      return null;
-    }
+    if (!foreground || verifying || state.metadataStatus !== 'ready' || state.route.type !== 'detail') return null;
     closeSwitcher();
     const currentUuid = state.route.uuid;
     const list = renderNodeSwitcher(getNodeStates(), currentUuid, {
@@ -580,6 +631,7 @@ export function startApp(root: HTMLElement): () => void {
     });
     page.append(list);
     switcher = list;
+    liveSocket?.request();
     const bounds = page.getBoundingClientRect();
     const top = clientY + list.offsetHeight <= window.innerHeight - 8 ? clientY : clientY - list.offsetHeight;
     list.style.left = `${Math.max(0, Math.min(clientX - bounds.left, page.clientWidth - list.offsetWidth))}px`;
@@ -653,13 +705,15 @@ export function startApp(root: HTMLElement): () => void {
     if (route.type === 'detail' && previousRoute.type === 'nodes') {
       state.historyRange = storedLatencyRange();
     }
-    clearHistoryRefresh();
-    historyRequestId += 1;
+    if (route.type === 'nodes' || (route.type === 'detail' && !metadataByUuid.has(route.uuid))) cancelHistory();
+    if (route.type !== previousRoute.type || (route.type === 'detail' && previousRoute.type === 'detail' && route.uuid !== previousRoute.uuid)) {
+      liveSocket?.request();
+    }
     state.history = null;
     state.displayedHistoryRange = null;
     state.historyStatus = 'loading';
     if (route.type === 'detail' && previousRoute.type === 'detail' && route.uuid === previousRoute.uuid) {
-      if (state.metadataStatus === 'ready') {
+      if (foreground && !verifying && state.metadataStatus === 'ready' && metadataByUuid.has(route.uuid)) {
         loadRouteHistory(route);
       } else {
         render();
@@ -669,12 +723,13 @@ export function startApp(root: HTMLElement): () => void {
     state.visibleTaskIds = null;
     clearStatusRefresh();
     statusController?.abort();
+    statusRequestId += 1;
     statusController = null;
     state.statusFine = null;
     state.statusCoarse = null;
-    if (route.type === 'detail' && state.metadataStatus === 'ready') {
+    outageHistory = createOutageHistory();
+    if (route.type === 'detail' && foreground && !verifying && state.metadataStatus === 'ready') {
       startDetailLoads(route);
-      return;
     }
     render();
   };
@@ -682,18 +737,22 @@ export function startApp(root: HTMLElement): () => void {
   const clearSessionData = (): void => {
     clearLegacyNodeCache();
     closeSwitcher();
-    liveSocket?.stop();
-    liveSocket = null;
+    stopLiveSocket();
     state.nodes = [];
+    latencyColorRegistry.clear();
+    persistLatencyColors();
+    metadataByUuid.clear();
+    knownOnlineState.clear();
     state.online.clear();
     state.reports.clear();
     state.lastUpdate = null;
     state.lastSnapshotTimestamp = null;
     state.tasks = [];
     state.tasksReady = false;
+    tasksController?.abort();
+    tasksController = null;
     pingTasksRequest = null;
-    clearHistoryRefresh();
-    historyRequestId += 1;
+    cancelHistory();
     historyCaches = newHistoryCaches();
     state.history = null;
     state.displayedHistoryRange = null;
@@ -702,112 +761,279 @@ export function startApp(root: HTMLElement): () => void {
     clearStatusRefresh();
     statusController?.abort();
     statusRequestId += 1;
+    statusController = null;
     state.statusFine = null;
     state.statusCoarse = null;
+    outageHistory = createOutageHistory();
     liveStatus.textContent = '';
   };
 
+  const requestedNode = (): string | undefined =>
+    state.route.type === 'detail' && !switcher && metadataByUuid.has(state.route.uuid) ? state.route.uuid : undefined;
+
   const refreshMetadata = async (): Promise<void> => {
-    metadataController?.abort();
+    if (!foreground || metadataController) return;
     const controller = new AbortController();
     metadataController = controller;
     const requestId = ++metadataRequestId;
     try {
       const nodes = await fetchNodeMetadata(controller.signal);
-      if (stopped || requestId !== metadataRequestId) {
-        return;
+      if (stopped || requestId !== metadataRequestId) return;
+      const resuming = verifying || state.metadataStatus !== 'ready';
+      const changed = JSON.stringify(state.nodes) !== JSON.stringify(nodes);
+      if (resuming || changed) {
+        const allowed = new Set(nodes.map(({ uuid }) => uuid));
+        for (const uuid of latencyColorRegistry.keys()) {
+          if (!allowed.has(uuid)) latencyColorRegistry.delete(uuid);
+        }
+        persistLatencyColors();
       }
-      const newlyAuthorized = state.metadataStatus !== 'ready';
-      state.nodes = nodes;
+      if (changed) {
+        const nextMetadata = new Map(nodes.map((node) => [node.uuid, node]));
+        const removed = state.nodes.some(({ uuid }) => !nextMetadata.has(uuid));
+        if (removed) {
+          for (const uuid of metadataByUuid.keys()) {
+            if (nextMetadata.has(uuid)) continue;
+            state.reports.delete(uuid);
+            state.online.delete(uuid);
+            knownOnlineState.delete(uuid);
+          }
+          state.lastSnapshotTimestamp = null;
+          cancelHistory();
+          historyCaches = newHistoryCaches();
+          if (state.route.type === 'detail' && !nextMetadata.has(state.route.uuid)) {
+            closeSwitcher();
+            clearStatusRefresh();
+            statusRequestId += 1;
+            statusController?.abort();
+            statusController = null;
+            state.history = null;
+            state.statusFine = null;
+            state.statusCoarse = null;
+            outageHistory = createOutageHistory();
+            state.displayedHistoryRange = null;
+          }
+        }
+        state.nodes = nodes;
+        metadataByUuid = nextMetadata;
+        if (switcher) updateNodeSwitcher(switcher, getNodeStates());
+        if (state.selectedGroup !== 'all' && !nodes.some((node) => node.group.trim() === state.selectedGroup)) {
+          state.selectedGroup = 'all';
+        }
+      }
+      verifying = false;
       state.metadataStatus = 'ready';
-      if (newlyAuthorized) {
+      if (resuming || changed) render();
+      if (!liveSocket) {
         liveSocket = createLiveSocket({
           scope: 'all',
+          nodeUuid: requestedNode,
           onSnapshot: applySnapshot,
           onStatusChange: updateLiveConnection,
         });
-        if (state.route.type === 'detail') {
-          startDetailLoads(state.route);
-        }
+      } else if (resuming) {
+        liveSocket.resume();
       }
+      if ((resuming || changed) && state.route.type === 'detail') startDetailLoads(state.route);
     } catch (error: unknown) {
-      if (stopped || requestId !== metadataRequestId) {
-        return;
-      }
-      if (isAccessDenied(error)) {
-        state.metadataStatus = 'denied';
-        clearSessionData();
-        render();
-        return;
-      }
-      if (state.metadataStatus === 'loading') {
+      if (stopped || requestId !== metadataRequestId || recheckAccess(error)) return;
+      if (verifying) {
+        accessMessage.textContent = chinese ? '无法确认访问权限，正在重试…' : 'Unable to verify access. Retrying…';
+      } else if (state.metadataStatus === 'loading') {
         state.metadataStatus = 'error';
+        render();
       }
     } finally {
-      if (metadataController === controller) {
-        metadataController = null;
-      }
+      if (metadataController === controller) metadataController = null;
     }
-    if (state.selectedGroup !== 'all' && !state.nodes.some((node) => node.group.trim() === state.selectedGroup)) {
-      state.selectedGroup = 'all';
-    }
-    render();
   };
 
-  const applySnapshot = (snapshot: LiveSnapshot): void => {
-    const reconciled = reconcileLiveSnapshot(
-      state.online,
-      state.reports,
-      snapshot,
-      state.lastSnapshotTimestamp,
-    );
-    if (reconciled === null) {
-      return;
-    }
+  const applySnapshot = (snapshot: LiveSnapshot, uuid: string | undefined): void => {
+    if (!foreground || verifying) return;
+    const changedUuids = new Set<string>();
+    let onlineChangedUuids: Set<string>;
     const hadSnapshot = state.lastUpdate !== null;
-    state.online = reconciled.online;
-    state.reports = reconciled.reports;
-    state.lastSnapshotTimestamp = reconciled.latestTimestamp ?? state.lastSnapshotTimestamp;
+
+    if (uuid) {
+      if (!metadataByUuid.has(uuid)) return;
+      const previous = state.reports.get(uuid);
+      const next = Object.hasOwn(snapshot.data, uuid) ? snapshot.data[uuid] : undefined;
+      if (previous?.updatedAt != null && next?.updatedAt != null && next.updatedAt < previous.updatedAt) return;
+      const isOnline = snapshot.online.includes(uuid);
+      onlineChangedUuids = new Set();
+      if (knownOnlineState.has(uuid) && state.online.has(uuid) !== isOnline) onlineChangedUuids.add(uuid);
+      if (liveReportChanged(previous, next) || !knownOnlineState.has(uuid) || onlineChangedUuids.size > 0) {
+        changedUuids.add(uuid);
+      }
+      if (isOnline) state.online.add(uuid);
+      else state.online.delete(uuid);
+      if (next) state.reports.set(uuid, next);
+      // Keep the last report of an offline node for its traffic totals and outage start.
+      knownOnlineState.add(uuid);
+    } else {
+      const authorizedSnapshot = {
+        online: snapshot.online.filter((id) => metadataByUuid.has(id)),
+        data: Object.fromEntries(Object.entries(snapshot.data).filter(([id]) => metadataByUuid.has(id))),
+      };
+      const reconciled = reconcileLiveSnapshot(state.online, state.reports, authorizedSnapshot, state.lastSnapshotTimestamp);
+      if (!reconciled) return;
+      state.online = reconciled.online;
+      state.reports = reconciled.reports;
+      state.lastSnapshotTimestamp = reconciled.latestTimestamp ?? state.lastSnapshotTimestamp;
+      onlineChangedUuids = reconciled.onlineChangedUuids;
+      for (const id of reconciled.changedUuids) changedUuids.add(id);
+      for (const { uuid: id } of state.nodes) {
+        if (!knownOnlineState.has(id)) {
+          onlineChangedUuids.delete(id);
+          changedUuids.add(id);
+          knownOnlineState.add(id);
+        }
+      }
+      if (switcher) updateNodeSwitcher(switcher, getNodeStates());
+    }
+
     state.lastUpdate = Date.now();
     updateTimestamp();
-
-    if (hadSnapshot && reconciled.onlineChangedUuids.size > 0) {
-      const route = state.route;
-      if (route.type === 'detail' && reconciled.onlineChangedUuids.has(route.uuid)) {
-        announce(`${getCurrentNode()?.metadata.name ?? 'node'} is ${state.online.has(route.uuid) ? 'online' : 'offline'}`);
-      } else if (reconciled.onlineChangedUuids.size === 1) {
-        const uuid = [...reconciled.onlineChangedUuids][0] ?? '';
-        const name = state.nodes.find((node) => node.uuid === uuid)?.name ?? 'node';
-        announce(`${name} is ${state.online.has(uuid) ? 'online' : 'offline'}`);
-      } else {
-        announce(`${reconciled.onlineChangedUuids.size} node availability changes`);
+    const route = state.route;
+    if (hadSnapshot && onlineChangedUuids.size > 0) {
+      const changed = route.type === 'detail'
+        ? onlineChangedUuids.has(route.uuid) ? route.uuid : null
+        : onlineChangedUuids.size === 1 ? [...onlineChangedUuids][0]! : null;
+      if (changed) {
+        announce(`${metadataByUuid.get(changed)?.name ?? 'node'} is ${state.online.has(changed) ? 'online' : 'offline'}`);
+      } else if (route.type === 'nodes') {
+        announce(`${onlineChangedUuids.size} node availability changes`);
       }
     }
-
-    if (!hadSnapshot) {
-      // Every node leaves the pending state at once, including ones with no report.
-      render();
-      return;
-    }
-    if (reconciled.changedUuids.size === 0) {
-      return;
-    }
-    if (state.route.type === 'detail') {
-      if (!reconciled.changedUuids.has(state.route.uuid)) {
-        return;
-      }
-      if (hadSnapshot && reconciled.onlineChangedUuids.has(state.route.uuid)) {
-        // Redraw the chart's offline bands now; records catch up a minute later.
-        render();
-        const uuid = state.route.uuid;
+    if (route.type === 'detail') {
+      if (!changedUuids.has(route.uuid)) return;
+      if (onlineChangedUuids.has(route.uuid)) {
+        applyOutages();
         clearStatusRefresh();
-        statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 75_000);
-        return;
+        statusRequestId += 1;
+        statusController?.abort();
+        statusController = null;
+        statusRefreshTimer = setTimeout(() => loadStatusRecords(route.uuid), 75_000);
+      } else {
+        updateCore();
       }
-      updateCore();
-    } else if (state.metadataStatus === 'ready') {
-      updateNodeRows(page, getNodeStates(), reconciled.changedUuids);
+    } else {
+      const changed = [...changedUuids].flatMap((id) => {
+        const metadata = metadataByUuid.get(id);
+        return metadata ? [nodeState(metadata)] : [];
+      });
+      updateNodeRows(page, changed, changedUuids);
     }
+  };
+
+  const showAccessCheck = (): void => {
+    page.hidden = true;
+    accessMessage.hidden = false;
+    accessMessage.textContent = chinese ? '正在确认访问权限…' : 'Checking access…';
+  };
+
+  const stopLiveSocket = (): void => {
+    if (socketCloseTimer !== null) clearTimeout(socketCloseTimer);
+    socketCloseTimer = null;
+    liveSocket?.stop();
+    liveSocket = null;
+  };
+
+  const suspendRequests = (): void => {
+    cancelHistory();
+    clearStatusRefresh();
+    statusRequestId += 1;
+    statusController?.abort();
+    statusController = null;
+    metadataRequestId += 1;
+    metadataController?.abort();
+    metadataController = null;
+    tasksController?.abort();
+    tasksController = null;
+    pingTasksRequest = null;
+    siteController?.abort();
+    siteController = null;
+  };
+
+  const pauseForeground = (): void => {
+    if (!foreground) return;
+    foreground = false;
+    hiddenAt = Date.now();
+    page.hidden = true;
+    accessMessage.hidden = true;
+    closeSwitcher();
+    if (refreshTimer !== null) clearInterval(refreshTimer);
+    if (metadataTimer !== null) clearInterval(metadataTimer);
+    if (timestampTimer !== null) clearInterval(timestampTimer);
+    refreshTimer = metadataTimer = timestampTimer = null;
+    liveSocket?.pause();
+    suspendRequests();
+    if (liveSocket) socketCloseTimer = setTimeout(stopLiveSocket, HIDDEN_SOCKET_GRACE_MS);
+  };
+
+  const revalidateForeground = (): void => {
+    verifying = true;
+    lastTick = Date.now();
+    updateTimestamp();
+    showAccessCheck();
+    liveSocket?.pause();
+    void refreshMetadata();
+  };
+
+  const tick = (): void => {
+    const now = Date.now();
+    const delayed = now - lastTick >= LIVE_STALE_MS;
+    lastTick = now;
+    if (delayed && !verifying && navigator.onLine && state.metadataStatus === 'ready') {
+      suspendRequests();
+      stopLiveSocket();
+      revalidateForeground();
+      return;
+    }
+    if (verifying) {
+      void refreshMetadata();
+      return;
+    }
+    liveSocket?.request();
+    if (state.route.type === 'detail' && !state.online.has(state.route.uuid)) updateCore();
+  };
+
+  const resumeForeground = (): void => {
+    if (foreground || document.hidden || stopped) return;
+    if (hiddenAt !== null && Date.now() - hiddenAt >= HIDDEN_SOCKET_GRACE_MS) stopLiveSocket();
+    if (socketCloseTimer !== null) clearTimeout(socketCloseTimer);
+    socketCloseTimer = null;
+    foreground = true;
+    void loadSiteName();
+    revalidateForeground();
+    refreshTimer = setInterval(tick, LIVE_REFRESH_MS);
+    timestampTimer = setInterval(updateTimestamp, 1000);
+    metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
+  };
+
+  const onVisibility = (): void => {
+    if (document.hidden) pauseForeground();
+    else resumeForeground();
+  };
+
+  const onPageHide = (): void => {
+    pauseForeground();
+    stopLiveSocket();
+  };
+
+  const onFreeze = (): void => {
+    if (document.hidden) onPageHide();
+  };
+
+  const onOnline = (): void => {
+    if (!foreground || document.hidden) return;
+    if (verifying) {
+      void refreshMetadata();
+      return;
+    }
+    suspendRequests();
+    stopLiveSocket();
+    revalidateForeground();
   };
 
   const handleRouteChange = (): void => {
@@ -826,34 +1052,27 @@ export function startApp(root: HTMLElement): () => void {
   document.addEventListener('pointerdown', handleMetricPointerDown);
   document.addEventListener('mousedown', handleDocumentMouseDown);
   document.addEventListener('keydown', handleDocumentKeyDown);
-  void loadSiteName();
-  void refreshMetadata();
-  refreshTimer = setInterval(() => {
-    liveSocket?.request();
-    // An offline node sends no reports, so keep its outage duration ticking.
-    if (state.route.type === 'detail' && !state.online.has(state.route.uuid)) {
-      updateCore();
-    }
-  }, LIVE_REFRESH_MS);
-  const timestampTimer = setInterval(updateTimestamp, 1000);
-  metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
+  document.addEventListener('visibilitychange', onVisibility);
+  document.addEventListener('freeze', onFreeze);
+  document.addEventListener('resume', onVisibility);
+  window.addEventListener('pageshow', resumeForeground);
+  window.addEventListener('pagehide', onPageHide);
+  window.addEventListener('online', onOnline);
   state.routeKey = routeKey(state.route);
-  render();
+  page.hidden = true;
+  accessMessage.hidden = true;
+  resumeForeground();
 
   return () => {
     stopped = true;
-    clearInterval(timestampTimer);
-    clearHistoryRefresh();
-    clearStatusRefresh();
-    statusController?.abort();
-    metadataController?.abort();
-    liveSocket?.stop();
-    if (refreshTimer !== null) {
-      clearInterval(refreshTimer);
-    }
-    if (metadataTimer !== null) {
-      clearInterval(metadataTimer);
-    }
+    pauseForeground();
+    stopLiveSocket();
+    document.removeEventListener('visibilitychange', onVisibility);
+    document.removeEventListener('freeze', onFreeze);
+    document.removeEventListener('resume', onVisibility);
+    window.removeEventListener('pageshow', resumeForeground);
+    window.removeEventListener('pagehide', onPageHide);
+    window.removeEventListener('online', onOnline);
     window.removeEventListener('popstate', handleRouteChange);
     window.removeEventListener('hashchange', handleRouteChange);
     page.removeEventListener('click', handlePageClick);

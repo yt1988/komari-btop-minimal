@@ -1,3 +1,4 @@
+import { updateText } from './dom';
 import { formatBytes, formatLoss, formatSpeed } from '../format';
 import type { LatencyQuery, LatencySeries, ResourceMetric } from '../domain';
 import {
@@ -120,7 +121,10 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   graph.append(offlineBands);
   let offline: OfflineInterval[] = [];
   const drawOffline = (intervals: readonly OfflineInterval[]): void => {
-    offline = intervals.filter((interval) => interval.end > start && interval.start < end);
+    const next = intervals.filter((interval) => interval.end > start && interval.start < end);
+    if (next.length === offline.length && next.every((interval, index) =>
+      interval.start === offline[index]!.start && interval.end === offline[index]!.end)) return;
+    offline = next;
     offlineBands.replaceChildren(...offline.map((interval) => {
       const band = svgElement('rect');
       band.classList.add('offline-band');
@@ -275,6 +279,28 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
   readout.className = 'chart-readout';
   readout.hidden = true;
   graphArea.append(readout);
+  const timestampLabel = document.createElement('span');
+  timestampLabel.className = 'chart-readout-time';
+  const offlineLabel = document.createElement('span');
+  offlineLabel.append(' · ');
+  const down = document.createElement('span');
+  down.className = 'danger';
+  down.textContent = 'offline';
+  offlineLabel.append(down);
+  readout.append(timestampLabel, offlineLabel);
+  const readings = new Map(series.map((lineSeries) => {
+    const value = document.createElement('span');
+    value.className = 'chart-readout-item';
+    const swatch = document.createElement('span');
+    swatch.className = 'chart-readout-swatch';
+    swatch.style.backgroundColor = colorOf(lineSeries.taskId);
+    swatch.setAttribute('aria-hidden', 'true');
+    const label = document.createTextNode('');
+    value.append(swatch, label);
+    readout.append(' · ', value);
+    return [lineSeries.taskId, label] as const;
+  }));
+  let lastMinute: number | null = null;
 
   const clearInspection = (): void => {
     crosshair.style.visibility = 'hidden';
@@ -298,69 +324,77 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
         continue;
       }
       if (entry.timestamp === null || entry.value === null) {
-        marker.style.visibility = 'hidden';
+        if (marker.style.visibility !== 'hidden') marker.style.visibility = 'hidden';
         continue;
       }
-      marker.setAttribute('d', dotPath(toX(entry.timestamp), toY(entry.value)));
-      marker.style.visibility = 'visible';
+      const path = dotPath(toX(entry.timestamp), toY(entry.value));
+      if (marker.getAttribute('d') !== path) marker.setAttribute('d', path);
+      if (marker.style.visibility !== 'visible') marker.style.visibility = 'visible';
     }
-    readout.replaceChildren();
-    const timestampLabel = document.createElement('span');
-    timestampLabel.className = 'chart-readout-time';
-    timestampLabel.textContent = formatLatencyTimestamp(timestamp, options.rangeHours);
-    readout.append(timestampLabel);
-    if (offline.some((interval) => timestamp >= interval.start && timestamp <= interval.end)) {
-      const down = document.createElement('span');
-      down.className = 'danger';
-      down.textContent = 'offline';
-      readout.append(document.createTextNode(' · '), down);
+    const minute = Math.floor(timestamp / 60_000);
+    if (minute !== lastMinute) {
+      updateText(timestampLabel, formatLatencyTimestamp(timestamp, options.rangeHours));
+      lastMinute = minute;
     }
-    entries.forEach((entry) => {
-      const separator = document.createTextNode(' · ');
-      const value = document.createElement('span');
-      value.className = 'chart-readout-item';
-      const swatch = document.createElement('span');
-      swatch.className = 'chart-readout-swatch';
-      swatch.style.backgroundColor = options.colorAssignments.get(entry.taskId) ?? latencySeriesColor(entry.taskId, options.allTaskIds);
-      swatch.setAttribute('aria-hidden', 'true');
+    const isOffline = offline.some((interval) => timestamp >= interval.start && timestamp <= interval.end);
+    if (offlineLabel.hidden === isOffline) offlineLabel.hidden = !isOffline;
+    for (const entry of entries) {
+      const label = readings.get(entry.taskId);
+      if (!label) continue;
       const reading = entry.loss === 1
         ? '100% loss'
         : entry.value === null
           ? 'no sample'
           : formatValue(entry.value);
-      value.append(swatch, document.createTextNode(`${entry.label} ${reading}`));
-      if (entry.value !== null && entry.loss !== null && entry.loss > 0) {
-        value.append(document.createTextNode(` ${formatLoss(entry.loss)}`));
-      }
-      readout.append(separator, value);
-    });
+      const loss = entry.value !== null && entry.loss !== null && entry.loss > 0 ? ` ${formatLoss(entry.loss)}` : '';
+      updateText(label, `${entry.label} ${reading}${loss}`);
+    }
     readout.style.left = `${ratio * 100}%`;
-    readout.hidden = false;
+    if (readout.hidden) readout.hidden = false;
   };
 
-  const inspectPointer = (event: PointerEvent): void => {
+  const inspectPointer = (clientX: number): void => {
     const bounds = graph.getBoundingClientRect();
-    if (bounds.width <= 0) {
-      return;
-    }
-    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    if (bounds.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
     inspectTimestamp(start + ratio * timeSpan);
   };
 
+  let frame: number | null = null;
+  let pendingX = 0;
+  const cancelFrame = (): void => {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+  };
+
   graph.addEventListener('pointerdown', (event) => {
+    cancelFrame();
     graph.setPointerCapture?.(event.pointerId);
-    inspectPointer(event);
+    inspectPointer(event.clientX);
   });
-  graph.addEventListener('pointermove', inspectPointer);
+  graph.addEventListener('pointermove', (event) => {
+    pendingX = event.clientX;
+    if (frame !== null) return;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      if (graph.isConnected) inspectPointer(pendingX);
+    });
+  });
   graph.addEventListener('pointerup', (event) => {
-    if (graph.hasPointerCapture?.(event.pointerId)) {
-      graph.releasePointerCapture(event.pointerId);
+    if (frame !== null) {
+      cancelFrame();
+      inspectPointer(event.clientX);
     }
+    if (graph.hasPointerCapture?.(event.pointerId)) graph.releasePointerCapture(event.pointerId);
   });
   graph.addEventListener('pointerleave', (event) => {
     if (event.pointerType === 'mouse') {
+      cancelFrame();
       clearInspection();
     }
   });
+  graph.addEventListener('pointercancel', () => {
+    cancelFrame();
+    clearInspection();
+  });
 }
-

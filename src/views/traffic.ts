@@ -1,3 +1,4 @@
+import { updateClass, updateText } from './dom';
 import { formatTraffic } from '../format';
 import type { NodeState } from '../domain';
 import { getTrafficPresentation } from '../traffic';
@@ -44,6 +45,7 @@ export function createTrafficCell(className = 'traffic') {
   progress.append(rule, track);
   limitRow.append(progress, usage);
   cell.append(current, limitRow);
+  let previousRatio: number | undefined;
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
 
   return {
@@ -53,8 +55,8 @@ export function createTrafficCell(className = 'traffic') {
       for (const { direction, total, text } of totals) {
         const value = direction === 'up' ? network?.totalUp : network?.totalDown;
         const tone = !node.online ? 'danger' : typeof value === 'number' && value >= 0 ? 'ok' : 'muted';
-        total.className = `direction ${direction} ${tone}`;
-        text.textContent = formatTraffic(value);
+        updateClass(total, `direction ${direction} ${tone}`);
+        updateText(text, formatTraffic(value));
       }
       const mode = node.metadata.trafficLimitType;
       const display = getTrafficPresentation(
@@ -64,7 +66,7 @@ export function createTrafficCell(className = 'traffic') {
       );
       const empty = !display.limited || display.used === null;
       const tone = empty ? 'is-empty' : !node.online ? 'danger' : display.tone === 'warning' ? 'warn' : '';
-      limitRow.className = `traffic-limit ${tone}`;
+      updateClass(limitRow, `traffic-limit ${tone}`);
       const [icon, english, chineseLabel] = mode === 'sum' || mode === 'up' || mode === 'down' || mode === 'min'
         ? rules[mode] : rules.max;
       const label = chinese ? chineseLabel : english;
@@ -73,8 +75,11 @@ export function createTrafficCell(className = 'traffic') {
         symbol.classList.toggle('traffic-rule-word', icon === 'MIN' || icon === 'MAX');
         rule.setAttribute('aria-label', label);
       }
-      fill.style.width = `${display.ratio * 100}%`;
-      usage.textContent = `${formatTraffic(display.used)} / ${formatTraffic(display.limit)}`;
+      if (previousRatio !== display.ratio) {
+        fill.style.width = `${display.ratio * 100}%`;
+        previousRatio = display.ratio;
+      }
+      updateText(usage, `${formatTraffic(display.used)} / ${formatTraffic(display.limit)}`);
     },
   };
 }

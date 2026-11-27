@@ -302,13 +302,13 @@ async function queryMetrics(
   });
 }
 
-export async function fetchResourceHistory(uuid: string, hours: number, metric: ResourceMetric): Promise<LatencyQuery> {
+export async function fetchResourceHistory(uuid: string, hours: number, metric: ResourceMetric, signal?: AbortSignal): Promise<LatencyQuery> {
   const keys = {
     cpu: ['cpu.usage'],
     mem: ['memory.used'],
     network: ['net.in.rate', 'net.out.rate'],
   }[metric];
-  return parseLatencyQuery(await queryMetrics(uuid, hours, { metric_keys: keys }, 'avg'), 'resource');
+  return parseLatencyQuery(await queryMetrics(uuid, hours, { metric_keys: keys }, 'avg', signal), 'resource');
 }
 
 /**
@@ -317,7 +317,7 @@ export async function fetchResourceHistory(uuid: string, hours: number, metric: 
  */
 export async function fetchLatency(uuid: string, hours: number, signal?: AbortSignal): Promise<LatencyQuery> {
   const optional = (query: Promise<LatencyQuery>): Promise<LatencyQuery | null> => query.catch((error: unknown) => {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (signal?.aborted || isAccessDenied(error)) {
       throw error;
     }
     return null;
@@ -337,13 +337,16 @@ export type LiveSocketStatus = 'connecting' | 'connected' | 'reconnecting' | 'er
 export type LiveSocketOptions = {
   scope: LiveSocketScope;
   uuid?: string;
-  onSnapshot: (snapshot: LiveSnapshot) => void;
+  nodeUuid?: () => string | undefined;
+  onSnapshot: (snapshot: LiveSnapshot, uuid: string | undefined) => void;
   onError?: (error: Error) => void;
   onStatusChange?: (status: LiveSocketStatus) => void;
 };
 
 export type LiveSocketHandle = {
   request: () => void;
+  pause: () => void;
+  resume: () => void;
   stop: () => void;
 };
 
@@ -351,6 +354,8 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  let paused = false;
+  let pendingUuid: string | undefined | null = null;
   let responseTimer: ReturnType<typeof setTimeout> | null = null;
   let retryIndex = 0;
   const delays = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -370,15 +375,18 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
     return url.toString();
   };
 
-  const requestMessage = (): string => options.scope === 'node' && options.uuid ? `get ${options.uuid}` : 'get';
+  const desiredUuid = (): string | undefined => options.nodeUuid
+    ? options.nodeUuid()
+    : options.scope === 'node' ? options.uuid : undefined;
 
   const request = (): void => {
     const current = socket;
-    if (current?.readyState !== WebSocket.OPEN || responseTimer !== null) {
+    if (paused || current?.readyState !== WebSocket.OPEN || responseTimer !== null) {
       return;
     }
     try {
-      current.send(requestMessage());
+      pendingUuid = desiredUuid();
+      current.send(pendingUuid ? `get ${pendingUuid}` : 'get');
       responseTimer = setTimeout(() => fail(current, new Error('/api/clients: snapshot timed out')), 9000);
     } catch (error) {
       fail(current, error);
@@ -386,7 +394,7 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
   };
 
   const scheduleReconnect = (): void => {
-    if (stopped || timer !== null) {
+    if (stopped || paused || timer !== null) {
       return;
     }
     const delay = delays[Math.min(retryIndex, delays.length - 1)] ?? 30000;
@@ -403,15 +411,17 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
       return;
     }
     socket = null;
+    pendingUuid = null;
     clearResponseTimer();
     current.close();
+    if (paused) return;
     options.onError?.(error instanceof Error ? error : new Error(String(error)));
     setStatus('error');
     scheduleReconnect();
   };
 
   const connect = (): void => {
-    if (stopped) {
+    if (stopped || paused) {
       return;
     }
     setStatus(retryIndex === 0 ? 'connecting' : 'reconnecting');
@@ -427,14 +437,21 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
         request();
       });
       current.addEventListener('message', (event) => {
-        if (socket !== current || typeof event.data !== 'string') {
+        if (socket !== current || pendingUuid === null || typeof event.data !== 'string') {
           return;
         }
         try {
-          const snapshot = parseLiveSnapshot(JSON.parse(event.data) as unknown);
+          const requestedUuid = pendingUuid;
+          pendingUuid = null;
           clearResponseTimer();
-          options.onSnapshot(snapshot);
+          if (paused) return;
           retryIndex = 0;
+          if (requestedUuid !== desiredUuid()) {
+            request();
+            return;
+          }
+          const snapshot = parseLiveSnapshot(JSON.parse(event.data) as unknown);
+          options.onSnapshot(snapshot, requestedUuid);
           setStatus('connected');
         } catch (error) {
           fail(current, error);
@@ -444,6 +461,7 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
       current.addEventListener('close', () => {
         if (socket === current) {
           socket = null;
+          pendingUuid = null;
           clearResponseTimer();
           scheduleReconnect();
         }
@@ -455,24 +473,45 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
     }
   };
 
+  const cancelReconnect = (): void => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const closeConnection = (): void => {
+    clearResponseTimer();
+    const current = socket;
+    socket = null;
+    pendingUuid = null;
+    current?.close();
+  };
+
   connect();
   return {
     request,
+    pause: () => {
+      paused = true;
+      cancelReconnect();
+    },
+    resume: () => {
+      if (stopped || !paused) return;
+      paused = false;
+      // An untagged reply from before the pause cannot serve as the fresh snapshot.
+      if (socket?.readyState !== WebSocket.OPEN || pendingUuid !== null) {
+        closeConnection();
+        connect();
+      } else {
+        request();
+      }
+    },
     stop: () => {
-      if (stopped) {
-        return;
-      }
+      if (stopped) return;
       stopped = true;
-      clearResponseTimer();
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      const current = socket;
-      socket = null;
-      current?.close();
+      cancelReconnect();
+      closeConnection();
       setStatus('stopped');
     },
   };
 }
-

@@ -1,3 +1,4 @@
+import { updateClass, updateText } from './dom';
 import type { NodeState } from '../domain';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 
@@ -25,37 +26,81 @@ function flag(region: string): HTMLImageElement | HTMLSpanElement {
   return image;
 }
 
+function updateLiveness(item: HTMLElement, dot: HTMLElement, node: NodeState): void {
+  const liveness = !node.live ? 'pending' : node.online ? 'online' : 'offline';
+  const current = item.getAttribute('aria-current') === 'page' ? ' is-current' : '';
+  updateClass(item, `node-switcher-item ${liveness}${current}`);
+  updateText(dot, node.live && !node.online ? '○' : '●');
+}
+
+type SwitcherItem = {
+  button: HTMLButtonElement;
+  dot: HTMLSpanElement;
+  name: HTMLSpanElement;
+  region: string;
+};
+
+const switchers = new WeakMap<HTMLElement, {
+  currentUuid: string;
+  handlers: NodeSwitcherHandlers;
+  items: Map<string, SwitcherItem>;
+}>();
+
+export function updateNodeSwitcher(list: HTMLElement, nodes: readonly NodeState[]): void {
+  const view = switchers.get(list);
+  if (!view) return;
+  const visible = new Set(nodes.map(({ metadata }) => metadata.uuid));
+  for (const [uuid, item] of view.items) {
+    if (visible.has(uuid)) continue;
+    item.button.remove();
+    view.items.delete(uuid);
+  }
+  let previous: HTMLElement | null = null;
+  for (const node of nodes) {
+    const { uuid, name, region } = node.metadata;
+    let item = view.items.get(uuid);
+    if (!item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      if (uuid === view.currentUuid) button.setAttribute('aria-current', 'page');
+      const dot = document.createElement('span');
+      dot.className = 'node-switcher-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      const label = document.createElement('span');
+      button.append(dot, flag(region), label);
+      button.addEventListener('click', () => view.handlers.onSelect(uuid));
+      let intent: ReturnType<typeof setTimeout> | undefined;
+      button.addEventListener('pointerenter', () => {
+        clearTimeout(intent);
+        intent = setTimeout(() => {
+          if (button.isConnected) view.handlers.onIntent?.(uuid);
+        }, 250);
+      });
+      button.addEventListener('pointerleave', () => clearTimeout(intent));
+      item = { button, dot, name: label, region };
+      view.items.set(uuid, item);
+    }
+    if (item.region !== region) {
+      item.button.children[1]?.replaceWith(flag(region));
+      item.region = region;
+    }
+    updateText(item.name, name);
+    updateLiveness(item.button, item.dot, node);
+    const next: Element | null = previous ? previous.nextElementSibling : list.firstElementChild;
+    if (next !== item.button) list.insertBefore(item.button, next);
+    previous = item.button;
+  }
+}
+
 /** A floating list of every node, in node list order, for jumping between detail pages. */
 export function renderNodeSwitcher(nodes: readonly NodeState[], currentUuid: string, handlers: NodeSwitcherHandlers): HTMLDivElement {
   const list = document.createElement('div');
   list.className = 'node-switcher';
   list.setAttribute('role', 'menu');
   list.setAttribute('aria-label', 'Switch node');
-  for (const node of nodes) {
-    const uuid = node.metadata.uuid;
-    const liveness = !node.live ? 'pending' : node.online ? 'online' : 'offline';
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = `node-switcher-item ${liveness}${uuid === currentUuid ? ' is-current' : ''}`;
-    item.setAttribute('role', 'menuitem');
-    if (uuid === currentUuid) {
-      item.setAttribute('aria-current', 'page');
-    }
-    const dot = document.createElement('span');
-    dot.className = 'node-switcher-dot';
-    dot.textContent = node.live && !node.online ? '○' : '●';
-    dot.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('span');
-    name.textContent = node.metadata.name;
-    item.append(dot, flag(node.metadata.region), name);
-    item.addEventListener('click', () => handlers.onSelect(uuid));
-    let intent: ReturnType<typeof setTimeout> | undefined;
-    item.addEventListener('pointerenter', () => {
-      intent = setTimeout(() => handlers.onIntent?.(uuid), 150);
-    });
-    item.addEventListener('pointerleave', () => clearTimeout(intent));
-    list.append(item);
-  }
+  switchers.set(list, { currentUuid, handlers, items: new Map() });
+  updateNodeSwitcher(list, nodes);
   // Up and down move between entries for keyboard users.
   list.addEventListener('keydown', (event) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {

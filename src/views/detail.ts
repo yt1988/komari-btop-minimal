@@ -1,3 +1,4 @@
+import { updateClass, updateText } from './dom';
 import { formatBytes, formatLoss, formatPercent, formatSpeed, lossTone, metricTone, networkTone } from '../format';
 import type { HistoryMetric, LatencyQuery, NodeState } from '../domain';
 import { LATENCY_RANGES, latencySeriesColor, latencyStats } from '../latency';
@@ -40,48 +41,47 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
   return node;
 }
 
-/**
- * The node name doubles as the node switcher's trigger (the app handles its
- * clicks by delegation). It is rebuilt only when the node changes, so live
- * updates keep its focus.
- */
+/** Keep the node switcher trigger mounted while its name or flag changes. */
 function updateDetailName(container: HTMLElement, node: NodeState | null): void {
-  const key = node ? `${node.metadata.uuid}|${node.metadata.region}|${node.metadata.name}` : '';
-  if (container.dataset.key === key) {
-    return;
-  }
+  const key = node ? JSON.stringify([node.metadata.uuid, node.metadata.region, node.metadata.name]) : '';
+  if (container.dataset.key === key) return;
   container.dataset.key = key;
   if (!node) {
     container.replaceChildren();
     return;
   }
-  const button = element('button', 'detail-switch');
-  button.type = 'button';
-  button.dataset.role = 'node-switch';
-  button.setAttribute('aria-haspopup', 'menu');
-  button.setAttribute('aria-expanded', 'false');
-  const code = normalizeRegionCode(node.metadata.region);
-  if (code) {
-    const region = element('img', 'detail-flag');
-    region.src = regionFlagUrl(code);
-    region.alt = `${code} flag`;
-    region.title = code;
-    region.addEventListener('error', () => {
-      if (region.dataset.fallback === 'true') {
-        return;
-      }
-      region.dataset.fallback = 'true';
-      region.src = regionFlagUrl('');
-    });
-    button.append(region);
+
+  let button = container.querySelector<HTMLButtonElement>('.detail-switch');
+  if (!button) {
+    button = element('button', 'detail-switch');
+    button.type = 'button';
+    button.dataset.role = 'node-switch';
+    button.setAttribute('aria-haspopup', 'menu');
+    button.setAttribute('aria-expanded', 'false');
+    const name = element('span', 'detail-name-text');
+    const caret = element('span', 'detail-switch-caret');
+    caret.textContent = '▾';
+    caret.setAttribute('aria-hidden', 'true');
+    button.append(name, caret);
+    container.replaceChildren(button);
   }
-  const name = element('span', 'detail-name-text');
-  name.textContent = node.metadata.name;
-  const caret = element('span', 'detail-switch-caret');
-  caret.textContent = '▾';
-  caret.setAttribute('aria-hidden', 'true');
-  button.append(name, caret);
-  container.replaceChildren(button);
+  const name = button.querySelector<HTMLElement>('.detail-name-text')!;
+  updateText(name, node.metadata.name);
+  const code = normalizeRegionCode(node.metadata.region);
+  const flag = button.querySelector<HTMLImageElement>('.detail-flag');
+  if ((flag?.title ?? '') === code) return;
+  flag?.remove();
+  if (!code) return;
+  const region = element('img', 'detail-flag');
+  region.src = regionFlagUrl(code);
+  region.alt = `${code} flag`;
+  region.title = code;
+  region.addEventListener('error', () => {
+    if (region.dataset.fallback === 'true') return;
+    region.dataset.fallback = 'true';
+    region.src = regionFlagUrl('');
+  });
+  name.before(region);
 }
 
 function createMetricRow() {
@@ -112,16 +112,16 @@ function createMetricRow() {
     update(node: NodeState): void {
       const report = node.report;
       const tone = (value: boolean, warning = false) => !node.online ? 'danger' : !value ? 'muted' : warning ? 'warn' : 'ok';
-      cpu.className = `metric metric-cpu ${tone(report?.cpuUsage != null, metricTone(report?.cpuUsage) === 'warning')}`;
-      cpu.textContent = formatPercent(report?.cpuUsage);
-      memory.className = `metric metric-mem ${tone(!!report?.ram)}`;
-      memory.textContent = report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--';
-      disk.className = `metric metric-disk ${tone(!!report?.disk)}`;
-      disk.textContent = report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--';
+      updateClass(cpu, `metric metric-cpu ${tone(report?.cpuUsage != null, metricTone(report?.cpuUsage) === 'warning')}`);
+      updateText(cpu, formatPercent(report?.cpuUsage));
+      updateClass(memory, `metric metric-mem ${tone(!!report?.ram)}`);
+      updateText(memory, report?.ram ? `${formatBytes(report.ram.used)} / ${formatBytes(report.ram.total)}` : '--');
+      updateClass(disk, `metric metric-disk ${tone(!!report?.disk)}`);
+      updateText(disk, report?.disk ? `${formatBytes(report.disk.used)} / ${formatBytes(report.disk.total)}` : '--');
       for (const { direction, item, text } of directions) {
         const value = report?.network?.[direction];
-        item.className = `direction ${tone(value != null, networkTone(value) === 'warning')}`;
-        text.textContent = formatSpeed(value);
+        updateClass(item, `direction ${tone(value != null, networkTone(value) === 'warning')}`);
+        updateText(text, formatSpeed(value));
       }
       traffic.update(node);
     },

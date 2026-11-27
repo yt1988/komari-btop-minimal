@@ -1,3 +1,4 @@
+import { updateClass, updateText } from './dom';
 import { formatPercent, formatSpeed, metricTone, networkTone, progressBar } from '../format';
 import { normalizeRegionCode, regionFlagUrl } from '../region';
 import type { NodeState } from '../domain';
@@ -18,10 +19,6 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className?: stri
   return node;
 }
 
-function addTone(node: HTMLElement, tone: 'normal' | 'warning', online: boolean): void {
-  node.classList.add(!online ? 'danger' : tone === 'warning' ? 'warn' : 'ok');
-}
-
 function regionFlag(code: string): HTMLImageElement {
   const flag = element('img', 'node-flag');
   flag.src = regionFlagUrl(code);
@@ -37,20 +34,31 @@ function regionFlag(code: string): HTMLImageElement {
   return flag;
 }
 
-function renderResource(cell: HTMLDivElement, value: number | null, online: boolean): void {
-  if (value === null || !Number.isFinite(value) || !online) {
-    const unavailable = element('span', online ? 'muted' : 'danger');
-    unavailable.textContent = '--';
-    cell.replaceChildren(unavailable);
-    return;
-  }
-  const percent = Math.max(0, Math.min(100, value));
-  const tone = metricTone(percent);
-  const bar = element('span', `resource-bar ${tone === 'warning' ? 'warn' : 'ok'}`);
-  bar.textContent = progressBar(percent, 100, 10);
-  const text = element('span', `percent ${tone === 'warning' ? 'warn' : 'ok'}`);
-  text.textContent = formatPercent(percent);
-  cell.replaceChildren(bar, text);
+function createResourceCell(label: string) {
+  const cell = element('div', `resource resource-${label.toLowerCase()}`);
+  cell.dataset.mobileLabel = label;
+  const bar = element('span', 'resource-bar');
+  const text = element('span', 'percent');
+  const unavailable = element('span');
+  unavailable.textContent = '--';
+
+  return {
+    cell,
+    update(value: number | null, online: boolean): void {
+      if (value === null || !Number.isFinite(value) || !online) {
+        updateClass(unavailable, online ? 'muted' : 'danger');
+        if (cell.firstChild !== unavailable) cell.replaceChildren(unavailable);
+        return;
+      }
+      const percent = Math.max(0, Math.min(100, value));
+      const tone = metricTone(percent) === 'warning' ? 'warn' : 'ok';
+      updateClass(bar, `resource-bar ${tone}`);
+      updateClass(text, `percent ${tone}`);
+      updateText(bar, progressBar(percent, 100, 10));
+      updateText(text, formatPercent(percent));
+      if (cell.firstChild !== bar) cell.replaceChildren(bar, text);
+    },
+  };
 }
 
 function resourceRatio(used: number | null | undefined, total: number | null | undefined): number | null {
@@ -78,15 +86,9 @@ function createNetworkCell() {
     update(node: NodeState): void {
       for (const { direction, speed, text } of directions) {
         const value = node.report?.network?.[direction];
-        text.textContent = node.online ? formatSpeed(value) : '--';
-        speed.className = `direction ${direction}`;
-        if (!node.online) {
-          speed.classList.add('danger');
-        } else if (value == null) {
-          speed.classList.add('muted');
-        } else {
-          addTone(speed, networkTone(value), true);
-        }
+        updateText(text, node.online ? formatSpeed(value) : '--');
+        const tone = !node.online ? 'danger' : value == null ? 'muted' : networkTone(value) === 'warning' ? 'warn' : 'ok';
+        updateClass(speed, `direction ${direction} ${tone}`);
       }
     },
   };
@@ -107,11 +109,13 @@ function createNodeRow(uuid: string, handlers: NodeListHandlers): NodeRow {
   const name = element('button', 'node-name');
   name.type = 'button';
   name.addEventListener('click', () => handlers.onNodeSelect(uuid));
-  // A pointer or focus resting on the name for 150ms prefetches the detail page's data.
+  // A pointer or focus resting on the name for 250ms prefetches the detail page's data.
   let intent: ReturnType<typeof setTimeout> | undefined;
   const startIntent = (): void => {
     clearTimeout(intent);
-    intent = setTimeout(() => handlers.onNodeIntent?.(uuid), 150);
+    intent = setTimeout(() => {
+      if (name.isConnected) handlers.onNodeIntent?.(uuid);
+    }, 250);
   };
   const cancelIntent = (): void => clearTimeout(intent);
   name.addEventListener('pointerenter', startIntent);
@@ -119,15 +123,12 @@ function createNodeRow(uuid: string, handlers: NodeListHandlers): NodeRow {
   name.addEventListener('pointerleave', cancelIntent);
   name.addEventListener('blur', cancelIntent);
   nodeCell.append(status, name);
-  const cpu = element('div', 'resource resource-cpu');
-  cpu.dataset.mobileLabel = 'CPU';
+  const cpu = createResourceCell('CPU');
   const network = createNetworkCell();
-  const memory = element('div', 'resource resource-mem');
-  memory.dataset.mobileLabel = 'MEM';
-  const disk = element('div', 'resource resource-disk');
-  disk.dataset.mobileLabel = 'DISK';
+  const memory = createResourceCell('MEM');
+  const disk = createResourceCell('DISK');
   const traffic = createTrafficCell();
-  row.append(nodeCell, cpu, memory, disk, network.cell, traffic.cell);
+  row.append(nodeCell, cpu.cell, memory.cell, disk.cell, network.cell, traffic.cell);
   let flag: HTMLImageElement | null = null;
 
   const update = (node: NodeState): void => {
@@ -149,17 +150,22 @@ function createNodeRow(uuid: string, handlers: NodeListHandlers): NodeRow {
     }
 
     const report = node.report;
-    renderResource(cpu, report?.cpuUsage ?? null, node.online);
+    cpu.update(report?.cpuUsage ?? null, node.online);
     network.update(node);
-    renderResource(memory, resourceRatio(report?.ram?.used, report?.ram?.total), node.online);
-    renderResource(disk, resourceRatio(report?.disk?.used, report?.disk?.total), node.online);
+    memory.update(resourceRatio(report?.ram?.used, report?.ram?.total), node.online);
+    disk.update(resourceRatio(report?.disk?.used, report?.disk?.total), node.online);
     traffic.update(node);
   };
   return { row, update };
 }
 
 function renderFilters(filters: HTMLElement, groups: string[], selectedGroup: string, handlers: NodeListHandlers): void {
-  filters.replaceChildren();
+  const focused = document.activeElement;
+  const existing = new Map([...filters.querySelectorAll('button')].map((button) => [button.dataset.group, button]));
+  const current = new Set(groups);
+  for (const [group, button] of existing) {
+    if (group !== undefined && !current.has(group)) button.remove();
+  }
   const emojiLabels: Record<string, string> = {
     '🏠': 'Home nodes',
     '🌐': 'Global nodes',
@@ -168,22 +174,34 @@ function renderFilters(filters: HTMLElement, groups: string[], selectedGroup: st
     '🌏': 'Global nodes',
   };
   const emojiOnly = (value: string): boolean => /^\p{Extended_Pictographic}(?:️|︎)?$/u.test(value);
-  groups.forEach((group) => {
-    const button = element('button', `filter${selectedGroup === group ? ' active' : ''}`);
-    button.type = 'button';
-    if (emojiOnly(group)) {
-      button.setAttribute('aria-label', emojiLabels[group] ?? 'Icon node group');
-      const emoji = element('span', 'filter-emoji');
-      emoji.textContent = group;
-      emoji.setAttribute('aria-hidden', 'true');
-      button.append(emoji);
-    } else {
-      button.textContent = group;
+  let previous: HTMLButtonElement | null = null;
+  for (const group of groups) {
+    let button = existing.get(group);
+    if (!button) {
+      button = element('button');
+      button.type = 'button';
+      button.dataset.group = group;
+      if (emojiOnly(group)) {
+        button.setAttribute('aria-label', emojiLabels[group] ?? 'Icon node group');
+        const emoji = element('span', 'filter-emoji');
+        emoji.textContent = group;
+        emoji.setAttribute('aria-hidden', 'true');
+        button.append(emoji);
+      } else {
+        button.textContent = group;
+      }
+      button.addEventListener('click', () => handlers.onGroupSelect(group));
     }
-    button.setAttribute('aria-pressed', String(selectedGroup === group));
-    button.addEventListener('click', () => handlers.onGroupSelect(group));
-    filters.append(button);
-  });
+    updateClass(button, `filter${selectedGroup === group ? ' active' : ''}`);
+    const pressed = String(selectedGroup === group);
+    if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
+    const next: Element | null = previous ? previous.nextElementSibling : filters.firstElementChild;
+    if (next !== button) filters.insertBefore(button, next);
+    previous = button;
+  }
+  if (focused instanceof HTMLButtonElement && filters.contains(focused) && document.activeElement !== focused) {
+    focused.focus({ preventScroll: true });
+  }
 }
 
 function createNodeList(container: HTMLElement) {
@@ -256,6 +274,7 @@ export function renderNodeList(
       rows.delete(uuid);
     }
   }
+  const focused = document.activeElement;
   let previous: Element = header;
   for (const node of visible) {
     const uuid = node.metadata.uuid;
@@ -271,6 +290,9 @@ export function renderNodeList(
     previous = entry.row;
   }
 
+  if (focused instanceof HTMLButtonElement && table.contains(focused) && document.activeElement !== focused) {
+    focused.focus({ preventScroll: true });
+  }
   table.querySelector('.empty-state')?.remove();
   if (nodes.length === 0) {
     const message = element('div', `empty-state ${emptyMessage === 'unable to load nodes' ? 'danger' : 'muted'}`);

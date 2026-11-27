@@ -1,3 +1,4 @@
+import { updateClass } from './dom';
 import type { NodeState } from '../domain';
 import { formatDayClock, formatDuration } from '../format';
 import type { OfflineInterval } from '../statusHistory';
@@ -18,11 +19,13 @@ function span(className: string, text: string): HTMLSpanElement {
 }
 
 export function renderStatusButton(button: HTMLButtonElement, node: NodeState | null, view: StatusView): void {
-  button.className = `detail-status ${node?.online ? 'ok' : 'danger'}`;
+  updateClass(button, `detail-status ${node?.online ? 'ok' : 'danger'}`);
   // Hovering or focusing the status reveals the outage list; without one it is plain text.
-  button.disabled = (view.outages?.length ?? 0) === 0;
+  const disabled = (view.outages?.length ?? 0) === 0;
+  if (button.disabled !== disabled) button.disabled = disabled;
   // Liveness is unknown until the first snapshot, so the status stays hidden until then.
-  button.hidden = node === null || !node.live;
+  const hidden = node === null || !node.live;
+  if (button.hidden !== hidden) button.hidden = hidden;
   if (!node) {
     button.replaceChildren();
     return;
@@ -59,11 +62,15 @@ function rows(outages: readonly OfflineInterval[], now: number): HTMLElement[] {
 
 /** Rebuilds the list only when its visible content changed; it stays empty without outages. */
 export function renderStatusPanel(panel: HTMLElement, view: StatusView): void {
-  const next = view.outages ? rows(view.outages, view.now) : [];
-  const signature = next.map((part) => `${part.className}|${part.textContent}`).join('/');
+  const outages = view.outages ?? [];
+  const signature = JSON.stringify([
+    outages.length,
+    outages.length > 0 ? new Date(view.now).toDateString() : '',
+    ...outages.slice(-MAX_ROWS).map(({ start, end, ongoing, startClipped }) => [start, ongoing ? null : end, startClipped]),
+  ]);
   if (panel.dataset.signature === signature) {
     return;
   }
   panel.dataset.signature = signature;
-  panel.replaceChildren(...next);
+  panel.replaceChildren(...rows(outages, view.now));
 }

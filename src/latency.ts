@@ -174,23 +174,37 @@ export function latencySeriesColor(taskId: string, _allTaskIds: readonly string[
   return LATENCY_SERIES_COLORS[seriesIndex(taskId) % LATENCY_SERIES_COLORS.length]!;
 }
 
+const indexedPoints = new WeakMap<LatencyPoint[], { point: LatencyPoint; index: number }[]>();
+
 function pointAtTime(series: LatencySeries, timestamp: number, rawIntervalMs: number): LatencyPoint | null {
-  const bucketWidth = (series.intervalSeconds ?? 0) * 1000;
-  let match: LatencyPoint | null = null;
-  let distance = Infinity;
-  for (const point of series.points) {
-    const offset = timestamp - point.timestamp;
-    // Komari timestamps an aggregate at the beginning of its bucket.
-    if (bucketWidth > 0) {
-      if (offset >= 0 && offset < bucketWidth && (!match || point.timestamp > match.timestamp)) {
-        match = point;
-      }
-    } else if (Math.abs(offset) <= rawIntervalMs / 2 && Math.abs(offset) < distance) {
-      match = point;
-      distance = Math.abs(offset);
-    }
+  let indexed = indexedPoints.get(series.points);
+  if (!indexed) {
+    indexed = series.points.map((point, index) => ({ point, index }))
+      .sort((left, right) => left.point.timestamp - right.point.timestamp)
+      .filter((entry, index, sorted) => index === 0 || entry.point.timestamp !== sorted[index - 1]!.point.timestamp);
+    indexedPoints.set(series.points, indexed);
   }
-  return match;
+
+  // Find the first point after the pointer. Buckets are half-open on the right.
+  let low = 0;
+  let high = indexed.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (indexed[middle]!.point.timestamp <= timestamp) low = middle + 1;
+    else high = middle;
+  }
+  const before = indexed[low - 1];
+  const after = indexed[low];
+  const beforeDistance = before ? timestamp - before.point.timestamp : Infinity;
+  const bucketWidth = (series.intervalSeconds ?? 0) * 1000;
+  if (bucketWidth > 0) return before && beforeDistance < bucketWidth ? before.point : null;
+
+  const afterDistance = after ? after.point.timestamp - timestamp : Infinity;
+  const useBefore = before && (beforeDistance < afterDistance || (
+    beforeDistance === afterDistance && before.index < (after?.index ?? Infinity)
+  ));
+  const distance = useBefore ? beforeDistance : afterDistance;
+  return distance <= rawIntervalMs / 2 ? (useBefore ? before.point : after?.point) ?? null : null;
 }
 
 export function formatLatencyTimestamp(timestamp: number, rangeHours: number): string {
