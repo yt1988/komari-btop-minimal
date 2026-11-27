@@ -22,12 +22,8 @@ function addTone(node: HTMLElement, tone: 'normal' | 'warning', online: boolean)
   node.classList.add(!online ? 'danger' : tone === 'warning' ? 'warn' : 'ok');
 }
 
-function regionFlag(region: string, className: string): HTMLImageElement | null {
-  const code = normalizeRegionCode(region);
-  if (!code) {
-    return null;
-  }
-  const flag = element('img', className);
+function regionFlag(code: string): HTMLImageElement {
+  const flag = element('img', 'node-flag');
   flag.src = regionFlagUrl(code);
   flag.alt = `${code} flag`;
   flag.title = code;
@@ -90,86 +86,71 @@ function networkCell(node: NodeState): HTMLDivElement {
   return cell;
 }
 
-function populateNodeRow(row: HTMLDivElement, node: NodeState, handlers: NodeListHandlers): void {
+type NodeRow = {
+  row: HTMLDivElement;
+  update: (node: NodeState) => void;
+};
+
+function createNodeRow(uuid: string, handlers: NodeListHandlers): NodeRow {
+  const row = element('div', 'row');
+  row.dataset.nodeUuid = uuid;
   const nodeCell = element('div', 'node');
-  const liveness = !node.live ? 'pending' : node.online ? 'online' : 'offline';
-  const status = element('span', `node-status ${liveness}`);
+  const status = element('span', 'node-status');
   status.textContent = '●';
   status.setAttribute('role', 'img');
-  status.setAttribute('aria-label', liveness);
-  const region = regionFlag(node.metadata.region, 'node-flag');
-  if (region) {
-    nodeCell.append(status, region);
-  } else {
-    nodeCell.append(status);
-  }
   const name = element('button', 'node-name');
   name.type = 'button';
-  name.textContent = node.metadata.name;
-  name.addEventListener('click', () => handlers.onNodeSelect(node.metadata.uuid));
+  name.addEventListener('click', () => handlers.onNodeSelect(uuid));
   // A pointer or focus resting on the name for 150ms prefetches the detail page's data.
   let intent: ReturnType<typeof setTimeout> | undefined;
   const startIntent = (): void => {
     clearTimeout(intent);
-    intent = setTimeout(() => handlers.onNodeIntent?.(node.metadata.uuid), 150);
+    intent = setTimeout(() => handlers.onNodeIntent?.(uuid), 150);
   };
   const cancelIntent = (): void => clearTimeout(intent);
   name.addEventListener('pointerenter', startIntent);
   name.addEventListener('focus', startIntent);
   name.addEventListener('pointerleave', cancelIntent);
   name.addEventListener('blur', cancelIntent);
-  nodeCell.append(name);
+  nodeCell.append(status, name);
+  row.append(nodeCell);
+  let flag: HTMLImageElement | null = null;
 
-  const report = node.report;
-  row.replaceChildren(
-    nodeCell,
-    resourceCell(report?.cpuUsage ?? null, node.online, 'cpu'),
-    resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online, 'mem'),
-    resourceCell(resourceRatio(report?.disk?.used, report?.disk?.total), node.online, 'disk'),
-    networkCell(node),
-    renderTrafficCell(node),
-  );
-}
-
-function nodeRow(node: NodeState, handlers: NodeListHandlers): HTMLDivElement {
-  const row = element('div', 'row');
-  row.dataset.nodeUuid = node.metadata.uuid;
-  populateNodeRow(row, node, handlers);
-  return row;
-}
-
-export function updateNodeRows(
-  container: HTMLElement,
-  nodes: NodeState[],
-  handlers: NodeListHandlers,
-  changedUuids?: ReadonlySet<string>,
-): void {
-  const nodesByUuid = new Map(nodes.map((node) => [node.metadata.uuid, node]));
-  container.querySelectorAll<HTMLDivElement>('.nodes .row[data-node-uuid]').forEach((row) => {
-    const uuid = row.dataset.nodeUuid;
-    if (!uuid || (changedUuids && !changedUuids.has(uuid))) {
-      return;
+  const update = (node: NodeState): void => {
+    const liveness = !node.live ? 'pending' : node.online ? 'online' : 'offline';
+    if (status.getAttribute('aria-label') !== liveness) {
+      status.className = `node-status ${liveness}`;
+      status.setAttribute('aria-label', liveness);
     }
-    const node = nodesByUuid.get(uuid);
-    if (node) {
-      populateNodeRow(row, node, handlers);
+    if (name.textContent !== node.metadata.name) {
+      name.textContent = node.metadata.name;
     }
-  });
+    const code = normalizeRegionCode(node.metadata.region);
+    if ((flag?.title ?? '') !== code) {
+      flag?.remove();
+      flag = code ? regionFlag(code) : null;
+      if (flag) {
+        name.before(flag);
+      }
+    }
+
+    const report = node.report;
+    while (nodeCell.nextElementSibling) {
+      nodeCell.nextElementSibling.remove();
+    }
+    row.append(
+      resourceCell(report?.cpuUsage ?? null, node.online, 'cpu'),
+      resourceCell(resourceRatio(report?.ram?.used, report?.ram?.total), node.online, 'mem'),
+      resourceCell(resourceRatio(report?.disk?.used, report?.disk?.total), node.online, 'disk'),
+      networkCell(node),
+      renderTrafficCell(node),
+    );
+  };
+  return { row, update };
 }
 
-export function renderNodeList(
-  container: HTMLElement,
-  nodes: NodeState[],
-  selectedGroup: string,
-  handlers: NodeListHandlers,
-  emptyMessage = 'no nodes',
-): void {
-  const section = element('section', 'nodes');
-  const command = element('div', 'command');
-  const filters = element('div', 'filters');
-  filters.setAttribute('role', 'group');
-  filters.setAttribute('aria-label', 'Filter nodes by group');
-  const groups = ['all', ...new Set(nodes.map((node) => node.metadata.group.trim()).filter((group) => group && group.toLowerCase() !== 'offline' && group.toLowerCase() !== 'all'))];
+function renderFilters(filters: HTMLElement, groups: string[], selectedGroup: string, handlers: NodeListHandlers): void {
+  filters.replaceChildren();
   const emojiLabels: Record<string, string> = {
     '🏠': 'Home nodes',
     '🌐': 'Global nodes',
@@ -194,6 +175,14 @@ export function renderNodeList(
     button.addEventListener('click', () => handlers.onGroupSelect(group));
     filters.append(button);
   });
+}
+
+function createNodeList(container: HTMLElement) {
+  const section = element('section', 'nodes');
+  const command = element('div', 'command');
+  const filters = element('div', 'filters');
+  filters.setAttribute('role', 'group');
+  filters.setAttribute('aria-label', 'Filter nodes by group');
   command.append(filters);
   section.append(command);
 
@@ -207,19 +196,76 @@ export function renderNodeList(
   });
   table.append(header);
 
-  const visibleNodes = selectedGroup === 'all'
-    ? nodes
-    : nodes.filter((node) => node.metadata.group.trim() === selectedGroup);
-  visibleNodes.forEach((node) => table.append(nodeRow(node, handlers)));
-  if (nodes.length === 0) {
-    const message = element('div', `empty-state ${emptyMessage === 'unable to load nodes' ? 'danger' : 'muted'}`);
-    message.textContent = emptyMessage;
-    table.append(message);
-  }
   const end = element('div', 'table-end');
   table.append(end);
   scroll.append(table);
   section.append(scroll);
   container.replaceChildren(section);
+  return { section, filters, header, end, table, rows: new Map<string, NodeRow>() };
 }
 
+// A list's rows live only as long as its mounted section.
+const lists = new WeakMap<Element, ReturnType<typeof createNodeList>>();
+
+export function updateNodeRows(container: HTMLElement, nodes: NodeState[], changedUuids: ReadonlySet<string>): void {
+  const rows = container.firstElementChild && lists.get(container.firstElementChild)?.rows;
+  if (!rows) {
+    return;
+  }
+  for (const node of nodes) {
+    if (changedUuids.has(node.metadata.uuid)) {
+      rows.get(node.metadata.uuid)?.update(node);
+    }
+  }
+}
+
+export function renderNodeList(
+  container: HTMLElement,
+  nodes: NodeState[],
+  selectedGroup: string,
+  handlers: NodeListHandlers,
+  emptyMessage = 'no nodes',
+): void {
+  let list = container.firstElementChild && lists.get(container.firstElementChild);
+  if (!list) {
+    list = createNodeList(container);
+    lists.set(list.section, list);
+  }
+  const { filters, header, end, table, rows } = list;
+  const groups = ['all', ...new Set(nodes.map((node) => node.metadata.group.trim()).filter((group) => group && group.toLowerCase() !== 'offline' && group.toLowerCase() !== 'all'))];
+  const filterKey = JSON.stringify([groups, selectedGroup]);
+  if (filters.dataset.key !== filterKey) {
+    renderFilters(filters, groups, selectedGroup, handlers);
+    filters.dataset.key = filterKey;
+  }
+
+  const visible = nodes.filter((node) => selectedGroup === 'all' || node.metadata.group.trim() === selectedGroup);
+  const visibleIds = new Set(visible.map((node) => node.metadata.uuid));
+  for (const [uuid, entry] of rows) {
+    if (!visibleIds.has(uuid)) {
+      entry.row.remove();
+      rows.delete(uuid);
+    }
+  }
+  let previous: Element = header;
+  for (const node of visible) {
+    const uuid = node.metadata.uuid;
+    let entry = rows.get(uuid);
+    if (!entry) {
+      entry = createNodeRow(uuid, handlers);
+      rows.set(uuid, entry);
+    }
+    entry.update(node);
+    if (previous.nextElementSibling !== entry.row) {
+      previous.after(entry.row);
+    }
+    previous = entry.row;
+  }
+
+  table.querySelector('.empty-state')?.remove();
+  if (nodes.length === 0) {
+    const message = element('div', `empty-state ${emptyMessage === 'unable to load nodes' ? 'danger' : 'muted'}`);
+    message.textContent = emptyMessage;
+    end.before(message);
+  }
+}

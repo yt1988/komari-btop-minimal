@@ -60,6 +60,10 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.header-right.is-stale {
+  color: #ffc45b;
+}
+
 .command,
 .detail-control {
   display: flex;

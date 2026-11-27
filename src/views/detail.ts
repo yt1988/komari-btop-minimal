@@ -21,6 +21,8 @@ export type DetailOptions = {
   latency: LatencyQuery | null;
   latencyState: 'loading' | 'ready' | 'error';
   latencyRange: number;
+  displayedLatencyRange: number | null;
+  chinese: boolean;
   visibleTaskIds: string[];
   colorAssignments: LatencyColorAssignment;
   overflowTaskIds: string[];
@@ -171,6 +173,7 @@ function latencySignature(options: DetailOptions): string {
   return JSON.stringify([
     options.latencyState,
     options.latencyRange,
+    options.displayedLatencyRange,
     options.visibleTaskIds,
     [...options.targets],
     [...options.colorAssignments],
@@ -275,53 +278,64 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
 
   const chart = element('div', 'chart-container');
   chart.dataset.role = 'latency-chart';
-  if (options.latencyState === 'loading') {
-    const loading = element('div', 'chart-message muted');
-    loading.setAttribute('role', 'status');
-    loading.textContent = 'loading latency';
-    chart.append(loading);
-  } else if (options.latencyState === 'error') {
-    const error = element('div', 'chart-message danger');
-    error.setAttribute('role', 'alert');
-    error.textContent = 'latency unavailable';
-    const retry = element('button', 'retry');
-    retry.type = 'button';
-    retry.textContent = 'retry';
-    retry.addEventListener('click', options.handlers.onLatencyRetry);
-    chart.append(error, retry);
-  } else {
+  const displayedRange = options.displayedLatencyRange;
+  if (options.latencyState !== 'ready') {
+    const rangeLabel = (hours: number) => LATENCY_RANGES.find((range) => range.hours === hours)?.label ?? `${hours}h`;
+    const requested = rangeLabel(options.latencyRange);
+    const failed = options.latencyState === 'error';
+    const status = element('div', `chart-message ${failed ? 'danger' : 'muted'}`);
+    const label = element('span');
+    label.setAttribute('role', failed ? 'alert' : 'status');
+    label.textContent = options.chinese
+      ? (failed ? `${requested} 加载失败` : `正在加载 ${requested}`)
+      : (failed ? `unable to load ${requested}` : `loading ${requested}`);
+    if (displayedRange !== null) {
+      const shown = rangeLabel(displayedRange);
+      label.append(options.chinese ? ` · 当前显示 ${shown}` : ` · showing ${shown}`);
+    }
+    status.append(label);
+    if (failed) {
+      const retry = element('button', 'retry');
+      retry.type = 'button';
+      retry.textContent = options.chinese ? '重试' : 'retry';
+      retry.addEventListener('click', options.handlers.onLatencyRetry);
+      status.append(' ', retry);
+    }
+    latencySection.append(status);
+  }
+  if (displayedRange !== null && options.latency) {
     renderLatencyChart(chart, {
       query: options.latency,
       visibleTaskIds: options.visibleTaskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
       allTaskIds: taskIds,
       colorAssignments: options.colorAssignments,
       labels: taskLabels,
-      rangeHours: options.latencyRange,
+      rangeHours: displayedRange,
       offline: options.status.outages ?? [],
       laneTaskIds: taskIds.filter((taskId) => !options.overflowTaskIds.includes(taskId)),
     });
   }
   latencySection.append(chart);
 
-  const overflowIds = options.overflowTaskIds.filter((taskId) => options.visibleTaskIds.includes(taskId));
+  const overflowIds = displayedRange === null ? [] : options.overflowTaskIds.filter((taskId) => options.visibleTaskIds.includes(taskId));
   overflowIds.forEach((taskId) => {
     const overflow = element('section', 'latency-overflow');
     const heading = element('h3', 'latency-overflow-title');
     heading.textContent = `${taskLabels.get(taskId) ?? taskId} latency`;
     const overflowChart = element('div', 'chart-container latency-overflow-chart');
     const overflowSeries = options.latency?.series.filter((series) => series.taskId === taskId) ?? [];
-    if (options.latencyState !== 'ready' || overflowSeries.length === 0) {
+    if (displayedRange === null || !options.latency || overflowSeries.length === 0) {
       const empty = element('div', 'chart-message muted');
-      empty.textContent = options.latencyState === 'ready' ? 'no latency records' : 'latency unavailable';
+      empty.textContent = 'no latency records';
       overflowChart.append(empty);
     } else {
       renderLatencyChart(overflowChart, {
-        query: { ...options.latency!, series: overflowSeries },
+        query: { ...options.latency, series: overflowSeries },
         visibleTaskIds: [taskId],
         allTaskIds: [taskId],
         colorAssignments: new Map([[taskId, latencySeriesColor(taskId)]]) as LatencyColorAssignment,
         labels: taskLabels,
-        rangeHours: options.latencyRange,
+        rangeHours: displayedRange,
         offline: options.status.outages ?? [],
       });
     }

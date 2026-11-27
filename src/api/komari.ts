@@ -233,16 +233,28 @@ export function parseLatencyQuery(raw: unknown): LatencyQuery {
   };
 }
 
+export class KomariHttpError extends Error {
+  constructor(path: string, readonly status: number) {
+    super(`${path}: HTTP ${status}`);
+  }
+}
+
+export function isAccessDenied(error: unknown): boolean {
+  return error instanceof KomariHttpError && (error.status === 401 || error.status === 403);
+}
+
 async function fetchJson(path: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(path, init);
+  const timeout = AbortSignal.timeout(15_000);
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  const response = await fetch(path, { ...init, signal });
   if (!response.ok) {
-    throw new Error(`${path}: HTTP ${response.status}`);
+    throw new KomariHttpError(path, response.status);
   }
   return response.json() as Promise<unknown>;
 }
 
 export async function fetchNodeMetadata(signal?: AbortSignal): Promise<NodeMetadata[]> {
-  return parseNodeMetadata(await fetchJson('/api/nodes', { signal }));
+  return parseNodeMetadata(await fetchJson('/api/nodes', { signal, cache: 'no-store' }));
 }
 
 export async function fetchPublicSettings(signal?: AbortSignal): Promise<PublicSettings> {
@@ -326,10 +338,17 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
   let socket: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
-  let requestPending = false;
+  let responseTimer: ReturnType<typeof setTimeout> | null = null;
   let retryIndex = 0;
   const delays = [1000, 2000, 4000, 8000, 16000, 30000];
   const setStatus = (status: LiveSocketStatus): void => options.onStatusChange?.(status);
+
+  const clearResponseTimer = (): void => {
+    if (responseTimer !== null) {
+      clearTimeout(responseTimer);
+      responseTimer = null;
+    }
+  };
 
   const endpoint = (): string => {
     const base = typeof window === 'undefined' ? 'http://localhost/' : window.location.href;
@@ -341,11 +360,16 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
   const requestMessage = (): string => options.scope === 'node' && options.uuid ? `get ${options.uuid}` : 'get';
 
   const request = (): void => {
-    if (socket?.readyState !== WebSocket.OPEN || requestPending) {
+    const current = socket;
+    if (current?.readyState !== WebSocket.OPEN || responseTimer !== null) {
       return;
     }
-    requestPending = true;
-    socket.send(requestMessage());
+    try {
+      current.send(requestMessage());
+      responseTimer = setTimeout(() => fail(current, new Error('/api/clients: snapshot timed out')), 9000);
+    } catch (error) {
+      fail(current, error);
+    }
   };
 
   const scheduleReconnect = (): void => {
@@ -361,43 +385,53 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
     }, delay);
   };
 
+  const fail = (current: WebSocket, error: unknown): void => {
+    if (socket !== current) {
+      return;
+    }
+    socket = null;
+    clearResponseTimer();
+    current.close();
+    options.onError?.(error instanceof Error ? error : new Error(String(error)));
+    setStatus('error');
+    scheduleReconnect();
+  };
+
   const connect = (): void => {
     if (stopped) {
       return;
     }
-    requestPending = false;
     setStatus(retryIndex === 0 ? 'connecting' : 'reconnecting');
     try {
-      socket = new WebSocket(endpoint());
-      socket.addEventListener('open', () => {
-        if (stopped) {
+      const current = new WebSocket(endpoint());
+      socket = current;
+      responseTimer = setTimeout(() => fail(current, new Error('/api/clients: connection timed out')), 9000);
+      current.addEventListener('open', () => {
+        if (socket !== current) {
           return;
         }
-        setStatus('connected');
+        clearResponseTimer();
         request();
       });
-      socket.addEventListener('message', (event) => {
-        requestPending = false;
-        if (typeof event.data !== 'string') {
+      current.addEventListener('message', (event) => {
+        if (socket !== current || typeof event.data !== 'string') {
           return;
         }
         try {
-          options.onSnapshot(parseLiveSnapshot(JSON.parse(event.data) as unknown));
+          const snapshot = parseLiveSnapshot(JSON.parse(event.data) as unknown);
+          clearResponseTimer();
+          options.onSnapshot(snapshot);
           retryIndex = 0;
           setStatus('connected');
         } catch (error) {
-          options.onError?.(error instanceof Error ? error : new Error(String(error)));
-          setStatus('error');
+          fail(current, error);
         }
       });
-      socket.addEventListener('error', () => {
-        options.onError?.(new Error('/api/clients: websocket error'));
-        setStatus('error');
-      });
-      socket.addEventListener('close', () => {
-        socket = null;
-        requestPending = false;
-        if (!stopped) {
+      current.addEventListener('error', () => fail(current, new Error('/api/clients: websocket error')));
+      current.addEventListener('close', () => {
+        if (socket === current) {
+          socket = null;
+          clearResponseTimer();
           scheduleReconnect();
         }
       });
@@ -416,13 +450,14 @@ export function createLiveSocket(options: LiveSocketOptions): LiveSocketHandle {
         return;
       }
       stopped = true;
-      requestPending = false;
+      clearResponseTimer();
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
       }
-      socket?.close();
+      const current = socket;
       socket = null;
+      current?.close();
       setStatus('stopped');
     },
   };

@@ -5,6 +5,8 @@ import {
   fetchNodeMetadata,
   fetchPingTasks,
   fetchPublicSettings,
+  isAccessDenied,
+  type LiveSocketStatus,
 } from './api/komari';
 import type { LatencyQuery, LiveReport, LiveSnapshot, NodeMetadata, NodeState, PingTask } from './domain';
 import { reconcileLiveSnapshot } from './live';
@@ -27,9 +29,11 @@ import type { StatusView } from './views/status';
 
 const DEFAULT_LATENCY_HOURS = 24;
 const LATENCY_REFRESH_MS = 60_000;
+const LIVE_REFRESH_MS = 3000;
+const LIVE_STALE_MS = 3 * LIVE_REFRESH_MS;
 
 type LatencyStatus = 'loading' | 'ready' | 'error';
-type LiveConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'error' | 'stopped';
+type MetadataStatus = 'loading' | 'ready' | 'error' | 'denied';
 
 type ApplicationState = {
   nodes: NodeMetadata[];
@@ -37,23 +41,21 @@ type ApplicationState = {
   online: Set<string>;
   tasks: PingTask[];
   tasksReady: boolean;
-  metadataReady: boolean;
-  metadataFailed: boolean;
+  metadataStatus: MetadataStatus;
   selectedGroup: string;
   lastUpdate: number | null;
   lastSnapshotTimestamp: number | null;
-  liveConnection: LiveConnectionStatus;
+  liveConnection: LiveSocketStatus;
   route: Route;
   routeKey: string;
   latencyRange: number;
   latency: LatencyQuery | null;
+  displayedLatencyRange: number | null;
   latencyStatus: LatencyStatus;
   visibleTaskIds: string[] | null;
   statusFine: number[] | null;
   statusCoarse: number[] | null;
 };
-
-let nodeMetadataCache: NodeMetadata[] | null = null;
 
 const LATENCY_RANGE_KEY = 'komari-btop-minimal:latency-range:v1';
 
@@ -73,21 +75,12 @@ function storeLatencyRange(hours: number): void {
   }
 }
 
-function isNodeMetadata(value: unknown): value is NodeMetadata {
-  if (typeof value !== 'object' || value === null) {
-    return false;
+function clearLegacyNodeCache(): void {
+  // Legacy persistent node lists could have been written by an earlier session.
+  try {
+    window.localStorage.removeItem('komari-btop-minimal:nodes:v1');
+  } catch {
   }
-  const node = value as Partial<NodeMetadata>;
-  return typeof node.uuid === 'string'
-    && typeof node.name === 'string'
-    && typeof node.group === 'string'
-    && typeof node.region === 'string'
-    && typeof node.weight === 'number'
-    && typeof node.memTotal === 'number'
-    && typeof node.diskTotal === 'number'
-    && typeof node.trafficLimit === 'number'
-    && typeof node.trafficLimitType === 'string'
-    && (node.createdAt === null || typeof node.createdAt === 'number');
 }
 
 function currentRoute(): Route {
@@ -138,14 +131,17 @@ export function startApp(root: HTMLElement): () => void {
     throw new Error('Missing application shell elements');
   }
 
+  const chinese = /^zh(?:-|$)/i.test(navigator.language);
+  const startedAt = Date.now();
+  clearLegacyNodeCache();
+
   const state: ApplicationState = {
     nodes: [],
     reports: new Map(),
     online: new Set(),
     tasks: [],
     tasksReady: false,
-    metadataReady: false,
-    metadataFailed: false,
+    metadataStatus: 'loading',
     selectedGroup: 'all',
     lastUpdate: null,
     lastSnapshotTimestamp: null,
@@ -154,6 +150,7 @@ export function startApp(root: HTMLElement): () => void {
     routeKey: '',
     latencyRange: storedLatencyRange(),
     latency: null,
+    displayedLatencyRange: null,
     latencyStatus: 'loading',
     visibleTaskIds: null,
     statusFine: null,
@@ -163,7 +160,8 @@ export function startApp(root: HTMLElement): () => void {
   let statusRequestId = 0;
   let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let statusCoarseAt = 0;
-  const latencyCache = createLatencyCache((uuid, hours) => fetchLatency(uuid, hours));
+  const newLatencyCache = () => createLatencyCache(fetchLatency);
+  let latencyCache = newLatencyCache();
   let latencyRequestId = 0;
   let latencyRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let metadataController: AbortController | null = null;
@@ -190,7 +188,7 @@ export function startApp(root: HTMLElement): () => void {
 
   // Before the first snapshot nothing is known about liveness. Treating nodes as
   // online then renders neutral "--" placeholders instead of a red offline flash
-  // over the cached node list; the status dot itself shows the pending state.
+  // over the node list; the status dot itself shows the pending state.
   const getNodeStates = (): NodeState[] => state.nodes.map((metadata) => ({
     metadata,
     live: state.lastUpdate !== null,
@@ -274,6 +272,7 @@ export function startApp(root: HTMLElement): () => void {
       applyOutages();
       statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 120_000);
     }).catch((error: unknown) => {
+      recheckAccess(error);
       const aborted = error instanceof DOMException && error.name === 'AbortError';
       if (stopped || requestId !== statusRequestId || aborted) {
         return;
@@ -286,23 +285,45 @@ export function startApp(root: HTMLElement): () => void {
     });
   };
 
-  const updateTimestamp = (): void => {
-    timestamp.textContent = formatRefreshTime(state.lastUpdate);
-  };
-
   const announce = (message: string): void => {
     liveStatus.textContent = message;
   };
 
-  const updateLiveConnection = (status: LiveConnectionStatus): void => {
+  const updateTimestamp = (): void => {
+    const age = Date.now() - (state.lastUpdate ?? startedAt);
+    const stale = state.metadataStatus === 'ready' && age >= LIVE_STALE_MS;
+    const seconds = Math.floor(age / 1000);
+    const staleLabel = state.lastUpdate === null
+      ? (chinese ? '等待实时数据' : 'waiting for live data')
+      : (chinese ? `数据已过期 · ${seconds} 秒前` : `data stale · ${seconds}s ago`);
+    const text = stale ? staleLabel : formatRefreshTime(state.lastUpdate);
+    if (timestamp.textContent !== text) {
+      timestamp.textContent = text;
+    }
+    timestamp.classList.toggle('is-stale', stale);
+    if (stale && !wasStale) {
+      announce(staleLabel);
+    } else if (!stale && wasStale && state.lastUpdate !== null) {
+      announce(chinese ? '实时数据已恢复' : 'live data restored');
+    }
+    wasStale = stale;
+  };
+  let wasStale = false;
+
+  const updateLiveConnection = (status: LiveSocketStatus): void => {
     const previous = state.liveConnection;
     state.liveConnection = status;
-    if (status === 'error') {
-      announce('live telemetry unavailable; reconnecting');
-    } else if (status === 'reconnecting' && previous !== 'reconnecting') {
+    if (status === 'reconnecting' && previous !== 'reconnecting') {
       announce('reconnecting live telemetry');
-    } else if (status === 'connected' && previous === 'error') {
-      announce('live telemetry connected; waiting for data');
+      if (state.metadataStatus === 'ready' && metadataController === null) {
+        void refreshMetadata();
+      }
+    }
+  };
+
+  const recheckAccess = (error: unknown): void => {
+    if (!stopped && isAccessDenied(error) && state.metadataStatus === 'ready' && metadataController === null) {
+      void refreshMetadata();
     }
   };
 
@@ -326,8 +347,10 @@ export function startApp(root: HTMLElement): () => void {
     },
     // Hovering a node name warms what its detail page needs first.
     onNodeIntent: (uuid: string) => {
-      latencyCache.prefetch(uuid, state.latencyRange, LATENCY_REFRESH_MS);
-      void ensurePingTasks();
+      if (state.metadataStatus === 'ready') {
+        latencyCache.prefetch(uuid, state.latencyRange, LATENCY_REFRESH_MS);
+        void ensurePingTasks();
+      }
     },
   };
 
@@ -338,8 +361,8 @@ export function startApp(root: HTMLElement): () => void {
     if (pingTasksRequest !== null) {
       return pingTasksRequest;
     }
-    pingTasksRequest = fetchPingTasks().then((tasks) => {
-      if (!stopped) {
+    const request = fetchPingTasks().then((tasks) => {
+      if (!stopped && pingTasksRequest === request) {
         state.tasks = tasks;
         state.tasksReady = true;
         if (state.route.type === 'detail') {
@@ -347,29 +370,47 @@ export function startApp(root: HTMLElement): () => void {
         }
       }
       return tasks;
-    }).catch(() => {
-      if (!stopped && state.route.type === 'detail') {
-        announce('latency targets unavailable; retrying when needed');
+    }).catch((error: unknown) => {
+      if (pingTasksRequest === request) {
+        recheckAccess(error);
+        if (!stopped && state.route.type === 'detail') {
+          announce('latency targets unavailable; retrying when needed');
+        }
       }
       return [];
     }).finally(() => {
-      pingTasksRequest = null;
+      if (pingTasksRequest === request) {
+        pingTasksRequest = null;
+      }
     });
-    return pingTasksRequest;
+    pingTasksRequest = request;
+    return request;
   };
 
   const render = (): void => {
     state.route = currentRoute();
     updateTimestamp();
-    if (!state.metadataReady && state.nodes.length === 0) {
-      const loading = document.createElement('div');
-      loading.className = 'empty-state muted';
-      loading.textContent = 'loading nodes';
-      page.replaceChildren(loading);
+    if (state.metadataStatus !== 'ready') {
+      const status = state.metadataStatus;
+      const message = document.createElement('div');
+      message.className = `empty-state ${status === 'loading' ? 'muted' : 'danger'}`;
+      message.setAttribute('role', status === 'loading' ? 'status' : 'alert');
+      message.textContent = status === 'denied'
+        ? (chinese ? '请登录，或获取新的分享链接。当前分享可能已失效。' : 'Sign in or get a new share link. Your current link may have expired.')
+        : status === 'error' ? 'unable to load nodes' : 'loading nodes';
+      if (status !== 'loading') {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'retry';
+        retry.textContent = chinese ? '重试' : 'retry';
+        retry.addEventListener('click', () => void refreshMetadata());
+        message.append(' ', retry);
+      }
+      page.replaceChildren(message);
       return;
     }
     if (state.route.type === 'nodes') {
-      renderNodeList(page, getNodeStates(), state.selectedGroup, nodeHandlers, state.metadataFailed ? 'unable to load nodes' : 'no nodes');
+      renderNodeList(page, getNodeStates(), state.selectedGroup, nodeHandlers);
       return;
     }
 
@@ -392,6 +433,8 @@ export function startApp(root: HTMLElement): () => void {
       latency: state.latency,
       latencyState: state.latencyStatus,
       latencyRange: state.latencyRange,
+      displayedLatencyRange: state.displayedLatencyRange,
+      chinese,
       visibleTaskIds: visible,
       colorAssignments: colorPlan.assignments,
       overflowTaskIds: colorPlan.overflowTaskIds,
@@ -408,7 +451,7 @@ export function startApp(root: HTMLElement): () => void {
           loadLatency(detailRoute.uuid, hours);
         },
         onLatencyRetry: () => {
-          loadLatency(detailRoute.uuid, state.latencyRange);
+          loadLatency(detailRoute.uuid, state.latencyRange, true);
         },
         onTaskToggle: (taskId) => {
           const currentIds = allTaskIds(state, detailRoute.uuid);
@@ -439,13 +482,14 @@ export function startApp(root: HTMLElement): () => void {
     const cached = refresh ? null : latencyCache.peek(uuid, hours);
     if (cached) {
       state.latency = cached.query;
+      state.displayedLatencyRange = hours;
       state.latencyStatus = 'ready';
       render();
       if (cached.ageMs < LATENCY_REFRESH_MS) {
         latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), LATENCY_REFRESH_MS - cached.ageMs);
         return;
       }
-    } else if (state.latency === null) {
+    } else if (state.displayedLatencyRange !== hours || state.latencyStatus === 'error') {
       state.latencyStatus = 'loading';
       render();
     }
@@ -454,18 +498,17 @@ export function startApp(root: HTMLElement): () => void {
         return;
       }
       state.latency = query;
+      state.displayedLatencyRange = hours;
       state.latencyStatus = 'ready';
       render();
       latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), LATENCY_REFRESH_MS);
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (!current()) {
         return;
       }
-      // Keep showing data that is already on screen; only an empty chart turns into an error.
-      if (state.latency === null) {
-        state.latencyStatus = 'error';
-        render();
-      }
+      recheckAccess(error);
+      state.latencyStatus = 'error';
+      render();
       latencyRefreshTimer = setTimeout(() => loadLatency(uuid, hours, true), 15_000);
     });
   };
@@ -580,6 +623,7 @@ export function startApp(root: HTMLElement): () => void {
     clearLatencyRefresh();
     latencyRequestId += 1;
     state.latency = null;
+    state.displayedLatencyRange = null;
     state.latencyStatus = 'loading';
     state.visibleTaskIds = null;
     clearStatusRefresh();
@@ -587,31 +631,42 @@ export function startApp(root: HTMLElement): () => void {
     statusController = null;
     state.statusFine = null;
     state.statusCoarse = null;
-    if (route.type === 'detail') {
+    if (route.type === 'detail' && state.metadataStatus === 'ready') {
       startDetailLoads(route.uuid);
       return;
     }
     render();
   };
 
-  const refreshMetadata = async (): Promise<void> => {
-    if (nodeMetadataCache === null) {
-      try {
-        const cached = window.localStorage.getItem('komari-btop-minimal:nodes:v1');
-        const parsed: unknown = cached ? JSON.parse(cached) : null;
-        if (Array.isArray(parsed) && parsed.every(isNodeMetadata)) {
-          nodeMetadataCache = parsed;
-        }
-      } catch {
-        nodeMetadataCache = null;
-      }
-    }
-    if (nodeMetadataCache !== null && state.nodes.length === 0) {
-      state.nodes = nodeMetadataCache;
-      state.metadataReady = true;
-      render();
-    }
+  const clearSessionData = (): void => {
+    clearLegacyNodeCache();
+    closeSwitcher();
+    liveSocket?.stop();
+    liveSocket = null;
+    state.nodes = [];
+    state.online.clear();
+    state.reports.clear();
+    state.lastUpdate = null;
+    state.lastSnapshotTimestamp = null;
+    state.tasks = [];
+    state.tasksReady = false;
+    pingTasksRequest = null;
+    clearLatencyRefresh();
+    latencyRequestId += 1;
+    latencyCache = newLatencyCache();
+    state.latency = null;
+    state.displayedLatencyRange = null;
+    state.latencyStatus = 'loading';
+    state.visibleTaskIds = null;
+    clearStatusRefresh();
+    statusController?.abort();
+    statusRequestId += 1;
+    state.statusFine = null;
+    state.statusCoarse = null;
+    liveStatus.textContent = '';
+  };
 
+  const refreshMetadata = async (): Promise<void> => {
     metadataController?.abort();
     const controller = new AbortController();
     metadataController = controller;
@@ -621,28 +676,37 @@ export function startApp(root: HTMLElement): () => void {
       if (stopped || requestId !== metadataRequestId) {
         return;
       }
+      const newlyAuthorized = state.metadataStatus !== 'ready';
       state.nodes = nodes;
-      nodeMetadataCache = nodes;
-      try {
-        window.localStorage.setItem('komari-btop-minimal:nodes:v1', JSON.stringify(nodes));
-      } catch {
+      state.metadataStatus = 'ready';
+      if (newlyAuthorized) {
+        liveSocket = createLiveSocket({
+          scope: 'all',
+          onSnapshot: applySnapshot,
+          onStatusChange: updateLiveConnection,
+        });
+        if (state.route.type === 'detail') {
+          startDetailLoads(state.route.uuid);
+        }
       }
-      state.metadataFailed = false;
     } catch (error: unknown) {
-      const aborted = error instanceof DOMException && error.name === 'AbortError';
-      if (stopped || requestId !== metadataRequestId || aborted) {
+      if (stopped || requestId !== metadataRequestId) {
         return;
       }
-      state.metadataFailed = state.nodes.length === 0;
+      if (isAccessDenied(error)) {
+        state.metadataStatus = 'denied';
+        clearSessionData();
+        render();
+        return;
+      }
+      if (state.metadataStatus === 'loading') {
+        state.metadataStatus = 'error';
+      }
     } finally {
       if (metadataController === controller) {
         metadataController = null;
       }
     }
-    if (stopped || requestId !== metadataRequestId) {
-      return;
-    }
-    state.metadataReady = true;
     if (state.selectedGroup !== 'all' && !state.nodes.some((node) => node.group.trim() === state.selectedGroup)) {
       state.selectedGroup = 'all';
     }
@@ -700,8 +764,8 @@ export function startApp(root: HTMLElement): () => void {
         return;
       }
       updateCore();
-    } else if (state.metadataReady) {
-      updateNodeRows(page, getNodeStates(), nodeHandlers, reconciled.changedUuids);
+    } else if (state.metadataStatus === 'ready') {
+      updateNodeRows(page, getNodeStates(), reconciled.changedUuids);
     }
   };
 
@@ -722,29 +786,21 @@ export function startApp(root: HTMLElement): () => void {
   document.addEventListener('keydown', handleDocumentKeyDown);
   void loadSiteName();
   void refreshMetadata();
-  liveSocket = createLiveSocket({
-    scope: 'all',
-    onSnapshot: applySnapshot,
-    onStatusChange: updateLiveConnection,
-  });
   refreshTimer = setInterval(() => {
     liveSocket?.request();
     // An offline node sends no reports, so keep its outage duration ticking.
     if (state.route.type === 'detail' && !state.online.has(state.route.uuid)) {
       updateCore();
     }
-  }, 3000);
+  }, LIVE_REFRESH_MS);
+  const timestampTimer = setInterval(updateTimestamp, 1000);
   metadataTimer = setInterval(() => void refreshMetadata(), 60_000);
-  if (state.route.type === 'detail') {
-    state.routeKey = routeKey(state.route);
-    startDetailLoads(state.route.uuid);
-  } else {
-    state.routeKey = 'nodes';
-    render();
-  }
+  state.routeKey = routeKey(state.route);
+  render();
 
   return () => {
     stopped = true;
+    clearInterval(timestampTimer);
     clearLatencyRefresh();
     clearStatusRefresh();
     statusController?.abort();

@@ -15,15 +15,14 @@ export function renderTrafficCell(node: NodeState, className = 'traffic'): HTMLD
   cell.dataset.mobileLabel = 'TRAFFIC';
 
   const network = node.report?.network;
-  const hasTotals = typeof network?.totalUp === 'number' && typeof network.totalDown === 'number';
   const current = element('div', 'traffic-current');
   for (const [direction, value] of [['down', network?.totalDown], ['up', network?.totalUp]] as const) {
-    const tone = !node.online && hasTotals ? 'danger' : hasTotals ? 'ok' : node.online ? 'muted' : 'danger';
+    const tone = !node.online ? 'danger' : typeof value === 'number' && value >= 0 ? 'ok' : 'muted';
     const total = element('span', `direction ${direction} ${tone}`);
     const arrow = element('span', 'direction-arrow');
     arrow.textContent = direction === 'down' ? '↓' : '↑';
     const text = element('span', 'direction-value');
-    text.textContent = hasTotals && typeof value === 'number' ? formatTraffic(value) : '--';
+    text.textContent = formatTraffic(value);
     total.append(arrow, text);
     current.append(total);
   }
@@ -35,7 +34,7 @@ export function renderTrafficCell(node: NodeState, className = 'traffic'): HTMLD
     node.metadata.trafficLimitType,
   );
   const limitRow = element('div', `traffic-limit${presentation.tone === 'warning' ? ' warn' : ''}`);
-  if (!presentation.limited || !hasTotals || presentation.used === null) {
+  if (!presentation.limited || presentation.used === null) {
     limitRow.classList.add('is-empty');
   } else if (!node.online) {
     limitRow.classList.add('danger');
@@ -47,7 +46,7 @@ export function renderTrafficCell(node: NodeState, className = 'traffic'): HTMLD
   track.append(fill);
   const text = element('span', 'limit-text');
   const limit = presentation.limit === null ? '--' : formatTraffic(presentation.limit);
-  text.textContent = hasTotals && presentation.used !== null ? `${formatTraffic(presentation.used)} / ${limit}` : `-- / ${limit}`;
+  text.textContent = presentation.used !== null ? `${formatTraffic(presentation.used)} / ${limit}` : `-- / ${limit}`;
   limitRow.append(track, text);
   cell.append(limitRow);
   return cell;
