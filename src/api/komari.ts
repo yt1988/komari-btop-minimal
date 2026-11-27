@@ -249,13 +249,31 @@ export function isAccessDenied(error: unknown): boolean {
 }
 
 async function fetchJson(path: string, init?: RequestInit): Promise<unknown> {
-  const timeout = AbortSignal.timeout(15_000);
-  const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
-  const response = await fetch(path, { ...init, signal });
-  if (!response.ok) {
-    throw new KomariHttpError(path, response.status);
+  const controller = new AbortController();
+  const parent = init?.signal;
+  const abort = (): void => controller.abort(parent?.reason);
+  if (parent?.aborted) abort();
+  else parent?.addEventListener('abort', abort, { once: true });
+  const timeout = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), 15_000);
+  try {
+    return await new Promise<unknown>((resolve, reject) => {
+      const { signal } = controller;
+      const cancel = (): void => reject(signal.reason);
+      if (signal.aborted) {
+        cancel();
+        return;
+      }
+      // Settle the caller even if a stalled WebKit fetch has not acknowledged the abort.
+      signal.addEventListener('abort', cancel, { once: true });
+      void fetch(path, { ...init, signal }).then((response) => {
+        if (!response.ok) throw new KomariHttpError(path, response.status);
+        return response.json() as Promise<unknown>;
+      }).then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel));
+    });
+  } finally {
+    clearTimeout(timeout);
+    parent?.removeEventListener('abort', abort);
   }
-  return response.json() as Promise<unknown>;
 }
 
 export async function fetchNodeMetadata(signal?: AbortSignal): Promise<NodeMetadata[]> {

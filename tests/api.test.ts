@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  fetchNodeMetadata,
   parseLatencyQuery,
   parseLiveSnapshot,
   parseNodeMetadata,
@@ -158,6 +159,46 @@ describe('Komari response normalization', () => {
     expect(() => unwrapStandardResponse({ status: 'error', message: 'nope' }, '/api/nodes')).toThrow('/api/nodes');
     expect(() => parseNodeMetadata({ status: 'success', data: [{ name: 'missing uuid' }] })).toThrow('/api/nodes');
     expect(() => parseLatencyQuery({ status: 'success', data: { series: [{ points: {} }] } })).toThrow('/api/rpc2');
+  });
+});
+
+describe('Komari request cancellation', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('propagates caller cancellation while a response body is being read', async () => {
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', async (_path: string, init: RequestInit) => {
+      const signal = init.signal!;
+      requestSignal = signal;
+      return {
+        ok: true,
+        json: () => new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+      };
+    });
+    const caller = new AbortController();
+    const result = fetchNodeMetadata(caller.signal);
+    const rejection = expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    await Promise.resolve();
+    caller.abort();
+    await rejection;
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it('times out an unresponsive request using only AbortController', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn((_path: string, _init: RequestInit) => new Promise(() => {}));
+    vi.stubGlobal('fetch', fetcher);
+    const result = fetchNodeMetadata();
+    const rejection = expect(result).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejection;
+    expect(fetcher.mock.calls[0]?.[1].signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

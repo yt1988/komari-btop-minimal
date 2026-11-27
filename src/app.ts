@@ -135,10 +135,16 @@ export function startApp(root: HTMLElement): () => void {
   }
 
   const accessMessage = document.createElement('div');
-  accessMessage.className = 'empty-state muted';
-  accessMessage.setAttribute('role', 'status');
+  accessMessage.className = 'empty-state';
+  const accessText = document.createElement('span');
+  accessText.setAttribute('role', 'status');
+  const accessRetry = document.createElement('button');
+  accessRetry.type = 'button';
+  accessRetry.className = 'retry';
+  accessMessage.append(accessText, ' ', accessRetry);
   page.before(accessMessage);
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
+  accessRetry.textContent = chinese ? '重新连接' : 'Reconnect';
   const startedAt = Date.now();
   clearLegacyNodeCache();
 
@@ -168,9 +174,11 @@ export function startApp(root: HTMLElement): () => void {
   const knownOnlineState = new Set<string>();
   let foreground = false;
   let verifying = true;
+  let accessRetryAt = 0;
   let lastTick = Date.now();
   let hiddenAt: number | null = null;
   let socketCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  let foregroundFrame: number | null = null;
   let timestampTimer: ReturnType<typeof setInterval> | null = null;
   let siteNameLoaded = false;
   let siteController: AbortController | null = null;
@@ -771,8 +779,9 @@ export function startApp(root: HTMLElement): () => void {
   const requestedNode = (): string | undefined =>
     state.route.type === 'detail' && !switcher && metadataByUuid.has(state.route.uuid) ? state.route.uuid : undefined;
 
-  const refreshMetadata = async (): Promise<void> => {
-    if (!foreground || metadataController) return;
+  const refreshMetadata = async (immediate = false): Promise<void> => {
+    if (!foreground || metadataController || (!immediate && verifying && Date.now() < accessRetryAt)) return;
+    if (verifying) showAccessCheck('checking');
     const controller = new AbortController();
     metadataController = controller;
     const requestId = ++metadataRequestId;
@@ -838,7 +847,8 @@ export function startApp(root: HTMLElement): () => void {
     } catch (error: unknown) {
       if (stopped || requestId !== metadataRequestId || recheckAccess(error)) return;
       if (verifying) {
-        accessMessage.textContent = chinese ? '无法确认访问权限，正在重试…' : 'Unable to verify access. Retrying…';
+        accessRetryAt = Date.now() + LIVE_REFRESH_MS;
+        showAccessCheck('retrying');
       } else if (state.metadataStatus === 'loading') {
         state.metadataStatus = 'error';
         render();
@@ -926,10 +936,16 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
-  const showAccessCheck = (): void => {
+  const showAccessCheck = (phase: 'paused' | 'checking' | 'retrying'): void => {
     page.hidden = true;
     accessMessage.hidden = false;
-    accessMessage.textContent = chinese ? '正在确认访问权限…' : 'Checking access…';
+    accessRetry.hidden = phase === 'checking';
+    const message = phase === 'paused'
+      ? (chinese ? '更新已暂停，返回后自动连接。' : 'Updates paused. Reconnecting when you return.')
+      : phase === 'retrying'
+        ? (chinese ? '暂时无法连接，正在重试。' : 'Unable to connect. Retrying.')
+        : (chinese ? '正在确认访问权限…' : 'Checking access…');
+    if (accessText.textContent !== message) accessText.textContent = message;
   };
 
   const stopLiveSocket = (): void => {
@@ -959,8 +975,7 @@ export function startApp(root: HTMLElement): () => void {
     if (!foreground) return;
     foreground = false;
     hiddenAt = Date.now();
-    page.hidden = true;
-    accessMessage.hidden = true;
+    showAccessCheck('paused');
     closeSwitcher();
     if (refreshTimer !== null) clearInterval(refreshTimer);
     if (metadataTimer !== null) clearInterval(metadataTimer);
@@ -973,9 +988,9 @@ export function startApp(root: HTMLElement): () => void {
 
   const revalidateForeground = (): void => {
     verifying = true;
+    accessRetryAt = 0;
     lastTick = Date.now();
     updateTimestamp();
-    showAccessCheck();
     liveSocket?.pause();
     void refreshMetadata();
   };
@@ -998,8 +1013,8 @@ export function startApp(root: HTMLElement): () => void {
     if (state.route.type === 'detail' && !state.online.has(state.route.uuid)) updateCore();
   };
 
-  const resumeForeground = (): void => {
-    if (foreground || document.hidden || stopped) return;
+  const resumeForeground = (userRequested = false): void => {
+    if (foreground || (!userRequested && document.hidden) || stopped) return;
     if (hiddenAt !== null && Date.now() - hiddenAt >= HIDDEN_SOCKET_GRACE_MS) stopLiveSocket();
     if (socketCloseTimer !== null) clearTimeout(socketCloseTimer);
     socketCloseTimer = null;
@@ -1016,6 +1031,16 @@ export function startApp(root: HTMLElement): () => void {
     else resumeForeground();
   };
 
+  const onForegroundSignal = (): void => {
+    resumeForeground();
+    if (foreground || stopped || foregroundFrame !== null) return;
+    // Check again at the next paint if focus arrived before the visibility state changed.
+    foregroundFrame = requestAnimationFrame(() => {
+      foregroundFrame = null;
+      resumeForeground();
+    });
+  };
+
   const onPageHide = (): void => {
     pauseForeground();
     stopLiveSocket();
@@ -1026,9 +1051,13 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const onOnline = (): void => {
-    if (!foreground || document.hidden) return;
+    if (document.hidden) return;
+    if (!foreground) {
+      resumeForeground();
+      return;
+    }
     if (verifying) {
-      void refreshMetadata();
+      void refreshMetadata(true);
       return;
     }
     suspendRequests();
@@ -1055,22 +1084,28 @@ export function startApp(root: HTMLElement): () => void {
   document.addEventListener('visibilitychange', onVisibility);
   document.addEventListener('freeze', onFreeze);
   document.addEventListener('resume', onVisibility);
-  window.addEventListener('pageshow', resumeForeground);
+  window.addEventListener('pageshow', onForegroundSignal);
+  window.addEventListener('focus', onForegroundSignal);
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('online', onOnline);
+  accessRetry.addEventListener('click', (event) => {
+    if (foreground) void refreshMetadata(true);
+    else resumeForeground(event.isTrusted);
+  });
   state.routeKey = routeKey(state.route);
-  page.hidden = true;
-  accessMessage.hidden = true;
+  showAccessCheck('paused');
   resumeForeground();
 
   return () => {
     stopped = true;
     pauseForeground();
     stopLiveSocket();
+    if (foregroundFrame !== null) cancelAnimationFrame(foregroundFrame);
     document.removeEventListener('visibilitychange', onVisibility);
     document.removeEventListener('freeze', onFreeze);
     document.removeEventListener('resume', onVisibility);
-    window.removeEventListener('pageshow', resumeForeground);
+    window.removeEventListener('pageshow', onForegroundSignal);
+    window.removeEventListener('focus', onForegroundSignal);
     window.removeEventListener('pagehide', onPageHide);
     window.removeEventListener('online', onOnline);
     window.removeEventListener('popstate', handleRouteChange);
