@@ -205,8 +205,18 @@ function createHistoryView(options: DetailOptions) {
   });
   controls.append(metricMenu.element, ranges);
   heading.append(controls);
+  const notice = element('div', 'chart-message');
+  const noticeLabel = element('span');
+  const retry = element('button', 'retry');
+  retry.type = 'button';
+  retry.textContent = 'retry';
+  retry.addEventListener('click', () => options.handlers.onHistoryRetry());
+  notice.append(noticeLabel);
   section.append(heading);
-  return { section, heading, metricMenu, rangeButtons, query: null as LatencyQuery | null, key: '' };
+  return {
+    section, heading, metricMenu, rangeButtons, notice, noticeLabel, retry,
+    query: null as LatencyQuery | null, key: '',
+  };
 }
 
 const historyViews = new WeakMap<Element, ReturnType<typeof createHistoryView>>();
@@ -223,8 +233,6 @@ export function dismissMetricMenuOutside(container: HTMLElement, target: EventTa
 function historySignature(options: DetailOptions): string {
   return JSON.stringify([
     options.metric,
-    options.historyState,
-    options.historyRange,
     options.displayedHistoryRange,
     options.visibleTaskIds,
     [...options.targets],
@@ -232,6 +240,24 @@ function historySignature(options: DetailOptions): string {
     [...options.colorAssignments],
     options.overflowTaskIds,
   ]);
+}
+
+function updateHistoryNotice(view: ReturnType<typeof createHistoryView>, options: DetailOptions): void {
+  if (options.historyState === 'ready') {
+    view.notice.remove();
+    return;
+  }
+  const rangeLabel = (hours: number) => LATENCY_RANGES.find((range) => range.hours === hours)?.label ?? `${hours}h`;
+  const requested = rangeLabel(options.historyRange);
+  const failed = options.historyState === 'error';
+  const role = failed ? 'alert' : 'status';
+  const showing = options.displayedHistoryRange === null ? '' : ` · showing ${rangeLabel(options.displayedHistoryRange)}`;
+  updateClass(view.notice, `chart-message ${failed ? 'danger' : 'muted'}`);
+  if (view.noticeLabel.getAttribute('role') !== role) view.noticeLabel.setAttribute('role', role);
+  updateText(view.noticeLabel, (failed ? `unable to load ${requested}` : `loading ${requested}`) + showing);
+  if (failed && !view.retry.parentElement) view.notice.append(view.retry);
+  if (!failed) view.retry.remove();
+  if (!view.notice.parentElement) view.heading.after(view.notice);
 }
 
 export function renderDetailView(container: HTMLElement, options: DetailOptions): void {
@@ -243,13 +269,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   const historyKey = historySignature(options);
   if (section && existingCore && existingCore.dataset.node === key) {
     updateDetailCore(existingCore, options.node, options.status);
-    // Redraws triggered by live data, the node list or task names leave the latency
-    // inputs unchanged; keep the charts so a hover readout is not interrupted.
-    const kept = historyViews.get(section);
-    if (options.node && kept && kept.query === options.history && kept.key === historyKey) {
-      section.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, options.status.outages ?? []));
-      return;
-    }
   } else {
     section = element('section', 'detail');
     const core = element('div', 'detail-core');
@@ -267,6 +286,35 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     return;
   }
 
+  let historyView = historyViews.get(section);
+  if (!historyView) {
+    historyView = createHistoryView(options);
+    historyViews.set(section, historyView);
+    section.append(historyView.section);
+  }
+  const { section: latencySection, heading, metricMenu, rangeButtons } = historyView;
+  // Keep the controls mounted across range changes and periodic chart refreshes.
+  metricMenu.update(options.metric);
+  for (const { hours, button } of rangeButtons) {
+    const selected = options.historyRange === hours;
+    const pressed = String(selected);
+    if (button.getAttribute('aria-pressed') !== pressed) {
+      button.classList.toggle('active', selected);
+      button.setAttribute('aria-pressed', pressed);
+    }
+  }
+  updateHistoryNotice(historyView, options);
+  if (historyView.query === options.history && historyView.key === historyKey) {
+    section.querySelectorAll<HTMLElement>('.chart-container').forEach((chart) => setChartOffline(chart, options.status.outages ?? []));
+    return;
+  }
+
+  heading.querySelector(':scope > .probe-set')?.remove();
+  const beforePlots = historyView.notice.parentElement ? historyView.notice : heading;
+  while (beforePlots.nextElementSibling) {
+    beforePlots.nextElementSibling.remove();
+  }
+
   const resource = options.metric !== 'latency' ? options.metric : undefined;
   const taskLabels = resource === 'cpu' ? new Map([['cpu.usage', 'CPU usage']])
     : resource === 'mem' ? new Map([['memory.used', 'Memory used']])
@@ -281,25 +329,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
     ['net.out.rate', '#ffc45b'],
   ]) : options.colorAssignments;
   const taskIds = [...taskLabels.keys()];
-
-  let historyView = historyViews.get(section);
-  if (!historyView) {
-    historyView = createHistoryView(options);
-    historyViews.set(section, historyView);
-    section.append(historyView.section);
-  }
-  const { section: latencySection, heading, metricMenu, rangeButtons } = historyView;
-  // Keep the controls mounted across range changes and periodic chart refreshes.
-  metricMenu.update(options.metric);
-  for (const { hours, button } of rangeButtons) {
-    const selected = options.historyRange === hours;
-    button.classList.toggle('active', selected);
-    button.setAttribute('aria-pressed', String(selected));
-  }
-  heading.querySelector(':scope > .probe-set')?.remove();
-  while (heading.nextElementSibling) {
-    heading.nextElementSibling.remove();
-  }
 
   const probes = element('div', 'probe-set');
   probes.setAttribute('role', 'group');
@@ -349,28 +378,6 @@ export function renderDetailView(container: HTMLElement, options: DetailOptions)
   const chart = element('div', 'chart-container');
   chart.dataset.role = resource ? 'resource-chart' : 'latency-chart';
   const displayedRange = options.displayedHistoryRange;
-  if (options.historyState !== 'ready') {
-    const rangeLabel = (hours: number) => LATENCY_RANGES.find((range) => range.hours === hours)?.label ?? `${hours}h`;
-    const requested = rangeLabel(options.historyRange);
-    const failed = options.historyState === 'error';
-    const status = element('div', `chart-message ${failed ? 'danger' : 'muted'}`);
-    const label = element('span');
-    label.setAttribute('role', failed ? 'alert' : 'status');
-    label.textContent = failed ? `unable to load ${requested}` : `loading ${requested}`;
-    if (displayedRange !== null) {
-      const shown = rangeLabel(displayedRange);
-      label.append(` · showing ${shown}`);
-    }
-    status.append(label);
-    if (failed) {
-      const retry = element('button', 'retry');
-      retry.type = 'button';
-      retry.textContent = 'retry';
-      retry.addEventListener('click', options.handlers.onHistoryRetry);
-      status.append(' ', retry);
-    }
-    latencySection.append(status);
-  }
   if (displayedRange !== null && options.history) {
     renderLatencyChart(chart, {
       query: options.history,

@@ -363,8 +363,10 @@ button {
 
 .limit-fill {
   display: block;
+  width: 100%;
   height: 100%;
   background: currentColor;
+  transform-origin: left center;
 }
 
 .limit-text {
@@ -403,6 +405,10 @@ button {
 .empty-state,
 .chart-message {
   padding: 12px 0;
+}
+
+.chart-message > .retry {
+  margin-inline-start: 1ch;
 }
 
 .back {

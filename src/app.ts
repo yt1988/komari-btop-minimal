@@ -190,6 +190,7 @@ export function startApp(root: HTMLElement): () => void {
   let statusController: AbortController | null = null;
   let statusRequestId = 0;
   let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let statusRefreshAt = 0;
   let statusCoarseAt = 0;
   const newHistoryCaches = () => ({
     latency: createLatencyCache(fetchLatency),
@@ -286,6 +287,12 @@ export function startApp(root: HTMLElement): () => void {
     }
   };
 
+  const scheduleStatusRefresh = (uuid: string, delay: number): void => {
+    clearStatusRefresh();
+    statusRefreshAt = Date.now() + delay;
+    statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), delay);
+  };
+
   /**
    * Loads the record times behind the outage list and chart offline bands:
    * per-minute data for the last 6h every call, five-minute data for 24h at
@@ -294,6 +301,7 @@ export function startApp(root: HTMLElement): () => void {
   const loadStatusRecords = (uuid: string): void => {
     if (!foreground || state.metadataStatus !== 'ready' || !metadataByUuid.has(uuid)) return;
     clearStatusRefresh();
+    statusRefreshAt = 0;
     statusController?.abort();
     const requestId = ++statusRequestId;
     const controller = new AbortController();
@@ -312,14 +320,14 @@ export function startApp(root: HTMLElement): () => void {
       state.statusFine = fine;
       state.statusCoarse = coarse;
       applyOutages();
-      statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 120_000);
+      scheduleStatusRefresh(uuid, 120_000);
     }).catch((error: unknown) => {
       const aborted = error instanceof DOMException && error.name === 'AbortError';
       if (stopped || requestId !== statusRequestId || aborted) {
         return;
       }
       if (recheckAccess(error)) return;
-      statusRefreshTimer = setTimeout(() => loadStatusRecords(uuid), 60_000);
+      scheduleStatusRefresh(uuid, 60_000);
     }).finally(() => {
       if (statusController === controller) {
         statusController = null;
@@ -331,14 +339,20 @@ export function startApp(root: HTMLElement): () => void {
     liveStatus.textContent = message;
   };
 
+  let formattedUpdateAt: number | null | undefined;
+  let formattedUpdate = '';
   const updateTimestamp = (): void => {
+    if (formattedUpdateAt !== state.lastUpdate) {
+      formattedUpdateAt = state.lastUpdate;
+      formattedUpdate = formatRefreshTime(formattedUpdateAt);
+    }
     const age = Date.now() - (state.lastUpdate ?? startedAt);
     const stale = state.metadataStatus === 'ready' && age >= LIVE_STALE_MS;
     const seconds = Math.floor(age / 1000);
     const staleLabel = state.lastUpdate === null
       ? (chinese ? '等待实时数据' : 'waiting for live data')
       : (chinese ? `数据已过期 · ${seconds} 秒前` : `data stale · ${seconds}s ago`);
-    const text = stale ? staleLabel : formatRefreshTime(state.lastUpdate);
+    const text = stale ? staleLabel : formattedUpdate;
     if (timestamp.textContent !== text) {
       timestamp.textContent = text;
     }
@@ -606,8 +620,13 @@ export function startApp(root: HTMLElement): () => void {
   };
 
   const startDetailLoads = (route: Extract<Route, { type: 'detail' }>): void => {
-    loadStatusRecords(route.uuid);
-    if (metadataByUuid.has(route.uuid)) loadRouteHistory(route);
+    if (!metadataByUuid.has(route.uuid)) return;
+    if (!statusController && statusRefreshTimer === null) {
+      const remaining = statusRefreshAt - Date.now();
+      if (remaining > 0 && remaining <= 120_000) scheduleStatusRefresh(route.uuid, remaining);
+      else loadStatusRecords(route.uuid);
+    }
+    loadRouteHistory(route);
   };
 
   // Node switcher on detail pages: the node name toggles it under the name, and a
@@ -741,6 +760,7 @@ export function startApp(root: HTMLElement): () => void {
     statusController = null;
     state.statusFine = null;
     state.statusCoarse = null;
+    statusRefreshAt = 0;
     outageHistory = createOutageHistory();
     if (route.type === 'detail' && foreground && state.metadataStatus === 'ready') {
       startDetailLoads(route);
@@ -778,6 +798,7 @@ export function startApp(root: HTMLElement): () => void {
     statusController = null;
     state.statusFine = null;
     state.statusCoarse = null;
+    statusRefreshAt = 0;
     outageHistory = createOutageHistory();
     liveStatus.textContent = '';
   };
@@ -841,6 +862,7 @@ export function startApp(root: HTMLElement): () => void {
             state.history = null;
             state.statusFine = null;
             state.statusCoarse = null;
+            statusRefreshAt = 0;
             outageHistory = createOutageHistory();
             state.displayedHistoryRange = null;
           }
@@ -929,11 +951,10 @@ export function startApp(root: HTMLElement): () => void {
       if (!changedUuids.has(route.uuid)) return;
       if (onlineChangedUuids.has(route.uuid)) {
         applyOutages();
-        clearStatusRefresh();
         statusRequestId += 1;
         statusController?.abort();
         statusController = null;
-        statusRefreshTimer = setTimeout(() => loadStatusRecords(route.uuid), 75_000);
+        scheduleStatusRefresh(route.uuid, 75_000);
       } else {
         updateCore();
       }

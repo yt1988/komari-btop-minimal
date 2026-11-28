@@ -207,12 +207,11 @@ function pointAtTime(series: LatencySeries, timestamp: number, rawIntervalMs: nu
   return distance <= rawIntervalMs / 2 ? (useBefore ? before.point : after?.point) ?? null : null;
 }
 
-export function formatLatencyTimestamp(timestamp: number, rangeHours: number): string {
-  const date = new Date(timestamp);
-  if (rangeHours <= 24) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  }
-  return `${date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+export function createLatencyTimeFormatter(rangeHours: number): (timestamp: number) => string {
+  const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (rangeHours <= 24) return clock.format;
+  const day = new Intl.DateTimeFormat(undefined, { month: '2-digit', day: '2-digit' });
+  return (timestamp) => `${day.format(timestamp)} ${clock.format(timestamp)}`;
 }
 
 export function latencyReadoutEntries(

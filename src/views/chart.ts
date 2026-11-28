@@ -3,7 +3,7 @@ import { formatBytes, formatLoss, formatSpeed } from '../format';
 import type { LatencyQuery, LatencySeries, ResourceMetric } from '../domain';
 import {
   buildLatencyRuns,
-  formatLatencyTimestamp,
+  createLatencyTimeFormatter,
   latencyCeiling,
   latencyTicks,
   latencyReadoutEntries,
@@ -264,11 +264,12 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     graphArea.append(lanes);
   }
 
+  const formatTime = createLatencyTimeFormatter(options.rangeHours);
   const xAxis = document.createElement('div');
   xAxis.className = 'axis-x';
   for (let index = 0; index < 4; index += 1) {
     const label = document.createElement('span');
-    label.textContent = formatLatencyTimestamp(start + timeSpan * index / 3, options.rangeHours);
+    label.textContent = formatTime(start + timeSpan * index / 3);
     xAxis.append(label);
   }
   graphArea.append(xAxis);
@@ -333,7 +334,7 @@ export function renderLatencyChart(container: HTMLElement, options: LatencyChart
     }
     const minute = Math.floor(timestamp / 60_000);
     if (minute !== lastMinute) {
-      updateText(timestampLabel, formatLatencyTimestamp(timestamp, options.rangeHours));
+      updateText(timestampLabel, formatTime(timestamp));
       lastMinute = minute;
     }
     const isOffline = offline.some((interval) => timestamp >= interval.start && timestamp <= interval.end);

@@ -17,6 +17,8 @@ const rules = {
   min: ['MIN', 'Lower of upload and download', '取上传和下载中的较小值'],
 } as const;
 
+const FILL_STEPS = 4096;
+
 export function createTrafficCell(className = 'traffic') {
   const cell = element('div', className);
   cell.dataset.mobileLabel = 'TRAFFIC';
@@ -45,7 +47,7 @@ export function createTrafficCell(className = 'traffic') {
   progress.append(rule, track);
   limitRow.append(progress, usage);
   cell.append(current, limitRow);
-  let previousRatio: number | undefined;
+  let previousFill: number | undefined;
   const chinese = /^zh(?:-|$)/i.test(navigator.language);
 
   return {
@@ -75,9 +77,11 @@ export function createTrafficCell(className = 'traffic') {
         symbol.classList.toggle('traffic-rule-word', icon === 'MIN' || icon === 'MAX');
         rule.setAttribute('aria-label', label);
       }
-      if (previousRatio !== display.ratio) {
-        fill.style.width = `${display.ratio * 100}%`;
-        previousRatio = display.ratio;
+      // Byte counters often move by less than a visible fraction of the track.
+      const fillStep = Math.round(display.ratio * FILL_STEPS);
+      if (previousFill !== fillStep) {
+        fill.style.transform = `scaleX(${fillStep / FILL_STEPS})`;
+        previousFill = fillStep;
       }
       updateText(usage, `${formatTraffic(display.used)} / ${formatTraffic(display.limit)}`);
     },
